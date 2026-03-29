@@ -1,13 +1,12 @@
 export interface SensorReading {
   id: string;
+  deviceId: string;
   indoorCO2: number;
   outdoorCO2: number;
-  temperature: number;
-  humidity: number;
   tvoc: number;
-  fanSpeed: number;
+  fanStatus: 'ON' | 'OFF';
   damperAngle: number;
-  ventilationStatus: 'active' | 'idle' | 'fault';
+  ventilationStatus: 'ACTIVE' | 'IDLE' | 'FAULT';
   controlMode: 'AUTO' | 'MANUAL';
   timestamp: string;
 }
@@ -33,11 +32,12 @@ export interface SystemSettings {
   refreshInterval: number; // seconds
   deviceName: string;
   location: string;
+  deviceEndpoint: string; // placeholder for ESP32 endpoint URL
 }
 
 export interface ControlCommand {
   controlMode: 'AUTO' | 'MANUAL';
-  fanSpeed: number;
+  fanStatus: 'ON' | 'OFF';
   damperAngle: number;
 }
 
@@ -47,4 +47,35 @@ export interface User {
   id: string;
   username: string;
   role: UserRole;
+}
+
+/** Payload structure for ESP32 HTTP POST to /api/device/readings */
+export interface DeviceReadingPayload {
+  deviceId: string;
+  apiKey: string;
+  indoorCO2: number;
+  outdoorCO2: number;
+  tvoc: number;
+  fanStatus: 'ON' | 'OFF';
+  damperAngle: number;
+  ventilationStatus: 'ACTIVE' | 'IDLE' | 'FAULT';
+  controlMode: 'AUTO' | 'MANUAL';
+  timestamp: string;
+}
+
+/** Payload structure for ESP32 heartbeat POST to /api/device/heartbeat */
+export interface DeviceHeartbeatPayload {
+  deviceId: string;
+  apiKey: string;
+  uptime: number;
+  wifiSignal: number;
+  firmwareVersion: string;
+}
+
+/** Response structure for GET /api/device/command/:deviceId */
+export interface DeviceCommandResponse {
+  controlMode: 'AUTO' | 'MANUAL';
+  fanStatus: 'ON' | 'OFF';
+  damperAngle: number;
+  updatedAt: string;
 }

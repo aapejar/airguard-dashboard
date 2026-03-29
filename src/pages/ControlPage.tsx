@@ -5,6 +5,7 @@ import { api } from '@/services/api';
 import { useAuth } from '@/context/AuthContext';
 import { cn } from '@/lib/utils';
 import { AlertTriangle, CheckCircle, Loader2 } from 'lucide-react';
+import { Switch } from '@/components/ui/switch';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -21,20 +22,22 @@ export default function ControlPage() {
   const canControl = user?.role === 'admin' || user?.role === 'operator';
 
   const [mode, setMode] = useState<'AUTO' | 'MANUAL'>(mockLatestReading.controlMode);
-  const [fanSpeed, setFanSpeed] = useState(mockLatestReading.fanSpeed);
+  const [fanOn, setFanOn] = useState(mockLatestReading.fanStatus === 'ON');
   const [damperAngle, setDamperAngle] = useState(mockLatestReading.damperAngle);
   const [showConfirm, setShowConfirm] = useState(false);
   const [applying, setApplying] = useState(false);
   const [applied, setApplied] = useState(false);
 
-  const fanError = fanSpeed < 0 || fanSpeed > 100;
   const damperError = damperAngle < 0 || damperAngle > 90;
-  const hasError = fanError || damperError;
 
   const handleApply = async () => {
     setShowConfirm(false);
     setApplying(true);
-    await api.sendControlCommand({ controlMode: mode, fanSpeed, damperAngle });
+    await api.sendControlCommand({
+      controlMode: mode,
+      fanStatus: fanOn ? 'ON' : 'OFF',
+      damperAngle,
+    });
     setApplying(false);
     setApplied(true);
     setTimeout(() => setApplied(false), 3000);
@@ -83,26 +86,30 @@ export default function ControlPage() {
 
         {/* Manual Controls */}
         {mode === 'MANUAL' && (
-          <div className="panel p-5 space-y-4">
+          <div className="panel p-5 space-y-5">
+            {/* Fan ON/OFF */}
             <div>
-              <label className="block text-xs text-muted-foreground uppercase tracking-wider mb-1.5">
-                Fan Speed (0–100%)
+              <label className="block text-xs text-muted-foreground uppercase tracking-wider mb-3">
+                Fan Control
               </label>
-              <input
-                type="number"
-                min={0}
-                max={100}
-                value={fanSpeed}
-                onChange={e => setFanSpeed(Number(e.target.value))}
-                disabled={!canControl}
-                className={cn(
-                  'w-full px-3 py-2.5 bg-muted border rounded-md text-sm text-foreground font-mono focus:outline-none focus:ring-1 focus:ring-primary transition-colors',
-                  fanError ? 'border-destructive' : 'border-border'
-                )}
-              />
-              {fanError && <p className="text-xs text-destructive mt-1">Must be 0–100</p>}
+              <div className="flex items-center justify-between bg-muted rounded-md px-4 py-3">
+                <div>
+                  <p className="text-sm font-semibold text-foreground">
+                    Fan is {fanOn ? 'ON' : 'OFF'}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    {fanOn ? 'Exhaust fan is running' : 'Exhaust fan is stopped'}
+                  </p>
+                </div>
+                <Switch
+                  checked={fanOn}
+                  onCheckedChange={setFanOn}
+                  disabled={!canControl}
+                />
+              </div>
             </div>
 
+            {/* Damper Angle */}
             <div>
               <label className="block text-xs text-muted-foreground uppercase tracking-wider mb-1.5">
                 Damper Angle (0–90°)
@@ -124,7 +131,7 @@ export default function ControlPage() {
 
             <button
               onClick={() => setShowConfirm(true)}
-              disabled={!canControl || hasError || applying}
+              disabled={!canControl || damperError || applying}
               className="w-full py-2.5 bg-primary text-primary-foreground rounded-md text-sm font-semibold hover:opacity-90 disabled:opacity-50 transition-opacity flex items-center justify-center gap-2"
             >
               {applying && <Loader2 className="h-4 w-4 animate-spin" />}
@@ -147,8 +154,8 @@ export default function ControlPage() {
           <AlertDialogHeader>
             <AlertDialogTitle className="text-foreground">Confirm Manual Override</AlertDialogTitle>
             <AlertDialogDescription className="text-muted-foreground">
-              You are about to set Fan Speed to <span className="font-mono text-foreground">{fanSpeed}%</span> and
-              Damper Angle to <span className="font-mono text-foreground">{damperAngle}°</span>.
+              You are about to set Fan to <span className="font-mono text-foreground font-semibold">{fanOn ? 'ON' : 'OFF'}</span> and
+              Damper Angle to <span className="font-mono text-foreground font-semibold">{damperAngle}°</span>.
               This will override automatic control.
             </AlertDialogDescription>
           </AlertDialogHeader>

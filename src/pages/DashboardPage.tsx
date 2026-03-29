@@ -1,10 +1,10 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { DashboardLayout } from '@/components/DashboardLayout';
 import { SensorCard } from '@/components/SensorCard';
 import { CO2Chart } from '@/components/CO2Chart';
 import { AlertsPanel } from '@/components/AlertsPanel';
 import { LogsTable } from '@/components/LogsTable';
-import { Wind, Thermometer, Droplets, Fan, Gauge, Activity, Wifi, ToggleRight } from 'lucide-react';
+import { Wind, Fan, Gauge, Activity, Wifi, ToggleRight, Zap } from 'lucide-react';
 import type { SensorReading } from '@/types/sensor';
 import { mockLatestReading, mockAlerts, mockSystemStatus, generateHistoricalReadings } from '@/data/mockData';
 import { cn } from '@/lib/utils';
@@ -38,7 +38,7 @@ export default function DashboardPage() {
       </div>
 
       {/* Sensor Cards Grid */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-4 gap-3 mb-6">
         <SensorCard
           label="Indoor CO₂"
           value={latest.indoorCO2}
@@ -48,15 +48,20 @@ export default function DashboardPage() {
           subtitle={latest.indoorCO2 > latest.outdoorCO2 ? '↑ Above outdoor' : '↓ Below outdoor'}
         />
         <SensorCard label="Outdoor CO₂" value={latest.outdoorCO2} unit="ppm" icon={Wind} status="normal" />
-        <SensorCard label="Temperature" value={latest.temperature} unit="°C" icon={Thermometer} />
-        <SensorCard label="Humidity" value={latest.humidity} unit="%" icon={Droplets} />
-        <SensorCard label="Fan Speed" value={latest.fanSpeed} unit="%" icon={Fan} />
+        <SensorCard label="TVOC" value={latest.tvoc} unit="ppb" icon={Zap} />
+        <SensorCard
+          label="Fan Status"
+          value={latest.fanStatus}
+          icon={Fan}
+          status={latest.fanStatus === 'ON' ? 'normal' : undefined}
+          subtitle={latest.fanStatus === 'ON' ? 'Running' : 'Stopped'}
+        />
         <SensorCard label="Damper Angle" value={latest.damperAngle} unit="°" icon={Gauge} />
         <SensorCard
           label="Ventilation"
-          value={latest.ventilationStatus.toUpperCase()}
+          value={latest.ventilationStatus}
           icon={Activity}
-          status={latest.ventilationStatus === 'active' ? 'normal' : undefined}
+          status={latest.ventilationStatus === 'ACTIVE' ? 'normal' : undefined}
         />
         <SensorCard
           label="Control Mode"

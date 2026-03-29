@@ -8,14 +8,13 @@ export function generateSensorReading(index: number): SensorReading {
   const indoorCO2 = randomBetween(380, 1200);
   return {
     id: `reading-${Date.now()}-${index}`,
+    deviceId: 'esp32-room-01',
     indoorCO2,
     outdoorCO2: randomBetween(380, 450),
-    temperature: randomBetween(22, 32),
-    humidity: randomBetween(35, 75),
     tvoc: randomBetween(50, 500),
-    fanSpeed: Math.round(randomBetween(0, 100)),
+    fanStatus: indoorCO2 > 600 ? 'ON' : 'OFF',
     damperAngle: Math.round(randomBetween(0, 90)),
-    ventilationStatus: indoorCO2 > 800 ? 'active' : indoorCO2 > 600 ? 'idle' : 'idle',
+    ventilationStatus: indoorCO2 > 800 ? 'ACTIVE' : 'IDLE',
     controlMode: 'AUTO',
     timestamp: now.toISOString(),
   };
@@ -27,14 +26,13 @@ export function generateHistoricalReadings(count: number = 50): SensorReading[] 
 
 export const mockLatestReading: SensorReading = {
   id: 'latest-001',
+  deviceId: 'esp32-room-01',
   indoorCO2: 687,
   outdoorCO2: 412,
-  temperature: 26.4,
-  humidity: 52.3,
   tvoc: 185,
-  fanSpeed: 65,
+  fanStatus: 'ON',
   damperAngle: 45,
-  ventilationStatus: 'active',
+  ventilationStatus: 'ACTIVE',
   controlMode: 'AUTO',
   timestamp: new Date().toISOString(),
 };
@@ -60,6 +58,7 @@ export const mockSettings: SystemSettings = {
   refreshInterval: 10,
   deviceName: 'AirGuard-ESP32-01',
   location: 'Lab Room 204',
+  deviceEndpoint: 'http://192.168.1.100',
 };
 
 export const mockUsers: User[] = [
