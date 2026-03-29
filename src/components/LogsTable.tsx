@@ -27,9 +27,8 @@ export function LogsTable({ data, maxRows = 10 }: LogsTableProps) {
               <th className="px-4 py-2.5 text-left text-muted-foreground font-medium">Time</th>
               <th className="px-4 py-2.5 text-right text-muted-foreground font-medium">CO₂ In</th>
               <th className="px-4 py-2.5 text-right text-muted-foreground font-medium">CO₂ Out</th>
-              <th className="px-4 py-2.5 text-right text-muted-foreground font-medium">Temp</th>
-              <th className="px-4 py-2.5 text-right text-muted-foreground font-medium">Humidity</th>
-              <th className="px-4 py-2.5 text-right text-muted-foreground font-medium">Fan</th>
+              <th className="px-4 py-2.5 text-right text-muted-foreground font-medium">TVOC</th>
+              <th className="px-4 py-2.5 text-center text-muted-foreground font-medium">Fan</th>
               <th className="px-4 py-2.5 text-right text-muted-foreground font-medium">Damper</th>
               <th className="px-4 py-2.5 text-center text-muted-foreground font-medium">Status</th>
             </tr>
@@ -44,9 +43,12 @@ export function LogsTable({ data, maxRows = 10 }: LogsTableProps) {
                   </td>
                   <td className="px-4 py-2.5 text-right text-foreground">{row.indoorCO2}</td>
                   <td className="px-4 py-2.5 text-right text-foreground">{row.outdoorCO2}</td>
-                  <td className="px-4 py-2.5 text-right text-foreground">{row.temperature}°</td>
-                  <td className="px-4 py-2.5 text-right text-foreground">{row.humidity}%</td>
-                  <td className="px-4 py-2.5 text-right text-foreground">{row.fanSpeed}%</td>
+                  <td className="px-4 py-2.5 text-right text-foreground">{row.tvoc}</td>
+                  <td className="px-4 py-2.5 text-center">
+                    <span className={cn('text-xs font-semibold', row.fanStatus === 'ON' ? 'text-success' : 'text-muted-foreground')}>
+                      {row.fanStatus}
+                    </span>
+                  </td>
                   <td className="px-4 py-2.5 text-right text-foreground">{row.damperAngle}°</td>
                   <td className="px-4 py-2.5 text-center">
                     <span className={cn('status-badge', {

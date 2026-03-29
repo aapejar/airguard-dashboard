@@ -28,6 +28,7 @@ export default function SettingsPage() {
     { key: 'refreshInterval', label: 'Refresh Interval', type: 'number', unit: 'seconds' },
     { key: 'deviceName', label: 'Device Name', type: 'text' },
     { key: 'location', label: 'Location', type: 'text' },
+    { key: 'deviceEndpoint', label: 'Device Endpoint URL', type: 'text', unit: 'http://...' },
   ];
 
   return (
