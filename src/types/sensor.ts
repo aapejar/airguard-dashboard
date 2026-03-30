@@ -3,7 +3,6 @@ export interface SensorReading {
   deviceId: string;
   indoorCO2: number;
   outdoorCO2: number;
-  tvoc: number;
   fanStatus: 'ON' | 'OFF';
   damperAngle: number;
   ventilationStatus: 'ACTIVE' | 'IDLE' | 'FAULT';
@@ -14,14 +13,14 @@ export interface SensorReading {
 export interface SystemStatus {
   deviceOnline: boolean;
   lastHeartbeat: string;
-  uptime: number; // seconds
+  uptime: number;
   firmwareVersion: string;
-  wifiSignal: number; // dBm
+  wifiSignal: number;
 }
 
 export interface AlertItem {
   id: string;
-  level: 'normal' | 'warning' | 'critical';
+  level: 'info' | 'warning' | 'critical';
   message: string;
   timestamp: string;
 }
@@ -29,10 +28,10 @@ export interface AlertItem {
 export interface SystemSettings {
   co2WarningThreshold: number;
   co2CriticalThreshold: number;
-  refreshInterval: number; // seconds
+  refreshInterval: number;
   deviceName: string;
   location: string;
-  deviceEndpoint: string; // placeholder for ESP32 endpoint URL
+  deviceEndpoint: string;
 }
 
 export interface ControlCommand {
@@ -49,13 +48,11 @@ export interface User {
   role: UserRole;
 }
 
-/** Payload structure for ESP32 HTTP POST to /api/device/readings */
 export interface DeviceReadingPayload {
   deviceId: string;
   apiKey: string;
   indoorCO2: number;
   outdoorCO2: number;
-  tvoc: number;
   fanStatus: 'ON' | 'OFF';
   damperAngle: number;
   ventilationStatus: 'ACTIVE' | 'IDLE' | 'FAULT';
@@ -63,7 +60,6 @@ export interface DeviceReadingPayload {
   timestamp: string;
 }
 
-/** Payload structure for ESP32 heartbeat POST to /api/device/heartbeat */
 export interface DeviceHeartbeatPayload {
   deviceId: string;
   apiKey: string;
@@ -72,7 +68,6 @@ export interface DeviceHeartbeatPayload {
   firmwareVersion: string;
 }
 
-/** Response structure for GET /api/device/command/:deviceId */
 export interface DeviceCommandResponse {
   controlMode: 'AUTO' | 'MANUAL';
   fanStatus: 'ON' | 'OFF';
