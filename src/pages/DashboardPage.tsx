@@ -1,13 +1,12 @@
-import { useState } from 'react';
 import { DashboardLayout } from '@/components/DashboardLayout';
 import { SensorCard } from '@/components/SensorCard';
 import { CO2Chart } from '@/components/CO2Chart';
 import { AlertsPanel } from '@/components/AlertsPanel';
+import { SystemStatusPanel } from '@/components/SystemStatusPanel';
 import { LogsTable } from '@/components/LogsTable';
-import { Wind, Fan, Gauge, Activity, Wifi, ToggleRight, Zap } from 'lucide-react';
-import type { SensorReading } from '@/types/sensor';
-import { mockLatestReading, mockAlerts, mockSystemStatus, generateHistoricalReadings } from '@/data/mockData';
-import { cn } from '@/lib/utils';
+import { Wind, Fan, Gauge, Activity, ToggleRight } from 'lucide-react';
+import { mockAlerts } from '@/data/mockData';
+import { useLiveData } from '@/hooks/useLiveData';
 
 function getCO2Status(val: number): 'normal' | 'warning' | 'critical' {
   if (val >= 1000) return 'critical';
@@ -16,9 +15,7 @@ function getCO2Status(val: number): 'normal' | 'warning' | 'critical' {
 }
 
 export default function DashboardPage() {
-  const [latest] = useState(mockLatestReading);
-  const [history] = useState<SensorReading[]>(() => generateHistoricalReadings(30));
-  const status = mockSystemStatus;
+  const { latest, history, status } = useLiveData(5000);
 
   return (
     <DashboardLayout>
@@ -28,55 +25,59 @@ export default function DashboardPage() {
           <h2 className="text-xl font-bold text-foreground">Dashboard</h2>
           <p className="text-xs text-muted-foreground mt-0.5">Real-time air quality overview</p>
         </div>
-        <div className="flex items-center gap-3">
-          <span className={cn('status-badge', status.deviceOnline ? 'status-online' : 'status-offline')}>
-            <Wifi className="h-3 w-3" />
-            {status.deviceOnline ? 'Online' : 'Offline'}
-          </span>
-          <span className="text-xs text-muted-foreground font-mono">{status.firmwareVersion}</span>
+        <div className="flex items-center gap-2">
+          <span className="h-2 w-2 rounded-full bg-success animate-pulse-glow" />
+          <span className="text-xs text-muted-foreground font-mono">Live</span>
         </div>
       </div>
 
-      {/* Sensor Cards Grid */}
-      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-4 gap-3 mb-6">
-        <SensorCard
-          label="Indoor CO₂"
-          value={latest.indoorCO2}
-          unit="ppm"
-          icon={Wind}
-          status={getCO2Status(latest.indoorCO2)}
-          subtitle={latest.indoorCO2 > latest.outdoorCO2 ? '↑ Above outdoor' : '↓ Below outdoor'}
-        />
-        <SensorCard label="Outdoor CO₂" value={latest.outdoorCO2} unit="ppm" icon={Wind} status="normal" />
-        <SensorCard label="TVOC" value={latest.tvoc} unit="ppb" icon={Zap} />
-        <SensorCard
-          label="Fan Status"
-          value={latest.fanStatus}
-          icon={Fan}
-          status={latest.fanStatus === 'ON' ? 'normal' : undefined}
-          subtitle={latest.fanStatus === 'ON' ? 'Running' : 'Stopped'}
-        />
-        <SensorCard label="Damper Angle" value={latest.damperAngle} unit="°" icon={Gauge} />
-        <SensorCard
-          label="Ventilation"
-          value={latest.ventilationStatus}
-          icon={Activity}
-          status={latest.ventilationStatus === 'ACTIVE' ? 'normal' : undefined}
-        />
-        <SensorCard
-          label="Control Mode"
-          value={latest.controlMode}
-          icon={ToggleRight}
-          subtitle={latest.controlMode === 'AUTO' ? 'Automatic regulation' : 'Manual override'}
-        />
+      {/* Primary: Indoor CO2 highlight */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
+        <div className="md:col-span-1">
+          <SensorCard
+            label="Indoor CO₂"
+            value={latest.indoorCO2}
+            unit="ppm"
+            icon={Wind}
+            status={getCO2Status(latest.indoorCO2)}
+            subtitle={latest.indoorCO2 > latest.outdoorCO2 ? '↑ Above outdoor level' : '↓ Below outdoor level'}
+            highlight
+          />
+        </div>
+        <div className="md:col-span-2 grid grid-cols-2 lg:grid-cols-3 gap-3">
+          <SensorCard label="Outdoor CO₂" value={latest.outdoorCO2} unit="ppm" icon={Wind} status="normal" />
+          <SensorCard
+            label="Fan Status"
+            value={latest.fanStatus}
+            icon={Fan}
+            status={latest.fanStatus === 'ON' ? 'normal' : undefined}
+            subtitle={latest.fanStatus === 'ON' ? 'Running' : 'Stopped'}
+          />
+          <SensorCard label="Damper" value={latest.damperAngle} unit="°" icon={Gauge} />
+          <SensorCard
+            label="Ventilation"
+            value={latest.ventilationStatus}
+            icon={Activity}
+            status={latest.ventilationStatus === 'ACTIVE' ? 'normal' : undefined}
+          />
+          <SensorCard
+            label="Control Mode"
+            value={latest.controlMode}
+            icon={ToggleRight}
+            subtitle={latest.controlMode === 'AUTO' ? 'Automatic' : 'Manual override'}
+          />
+        </div>
       </div>
 
-      {/* Chart + Alerts */}
+      {/* Chart + Alerts + Status */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
         <div className="lg:col-span-2">
           <CO2Chart data={history} />
         </div>
-        <AlertsPanel alerts={mockAlerts} />
+        <div className="space-y-4">
+          <SystemStatusPanel status={status} />
+          <AlertsPanel alerts={mockAlerts} />
+        </div>
       </div>
 
       {/* Logs */}

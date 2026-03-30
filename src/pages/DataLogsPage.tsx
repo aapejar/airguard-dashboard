@@ -12,7 +12,7 @@ export default function DataLogsPage() {
         <h2 className="text-xl font-bold text-foreground">Data Logs</h2>
         <p className="text-xs text-muted-foreground mt-0.5">Historical sensor readings</p>
       </div>
-      <LogsTable data={logs} maxRows={50} />
+      <LogsTable data={logs} paginated />
     </DashboardLayout>
   );
 }

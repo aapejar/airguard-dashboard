@@ -11,7 +11,6 @@ export function generateSensorReading(index: number): SensorReading {
     deviceId: 'esp32-room-01',
     indoorCO2,
     outdoorCO2: randomBetween(380, 450),
-    tvoc: randomBetween(50, 500),
     fanStatus: indoorCO2 > 600 ? 'ON' : 'OFF',
     damperAngle: Math.round(randomBetween(0, 90)),
     ventilationStatus: indoorCO2 > 800 ? 'ACTIVE' : 'IDLE',
@@ -29,7 +28,6 @@ export const mockLatestReading: SensorReading = {
   deviceId: 'esp32-room-01',
   indoorCO2: 687,
   outdoorCO2: 412,
-  tvoc: 185,
   fanStatus: 'ON',
   damperAngle: 45,
   ventilationStatus: 'ACTIVE',
@@ -46,10 +44,11 @@ export const mockSystemStatus: SystemStatus = {
 };
 
 export const mockAlerts: AlertItem[] = [
-  { id: 'a1', level: 'warning', message: 'Indoor CO₂ above 600 ppm', timestamp: new Date(Date.now() - 300000).toISOString() },
-  { id: 'a2', level: 'normal', message: 'Ventilation system activated', timestamp: new Date(Date.now() - 600000).toISOString() },
-  { id: 'a3', level: 'critical', message: 'Indoor CO₂ exceeded 1000 ppm', timestamp: new Date(Date.now() - 1800000).toISOString() },
-  { id: 'a4', level: 'normal', message: 'Device reconnected', timestamp: new Date(Date.now() - 3600000).toISOString() },
+  { id: 'a1', level: 'warning', message: 'Indoor CO₂ above 600 ppm — ventilation increased', timestamp: new Date(Date.now() - 300000).toISOString() },
+  { id: 'a2', level: 'info', message: 'Ventilation system activated automatically', timestamp: new Date(Date.now() - 600000).toISOString() },
+  { id: 'a3', level: 'critical', message: 'Indoor CO₂ exceeded 1000 ppm — immediate action required', timestamp: new Date(Date.now() - 1800000).toISOString() },
+  { id: 'a4', level: 'info', message: 'Device reconnected after brief disconnection', timestamp: new Date(Date.now() - 3600000).toISOString() },
+  { id: 'a5', level: 'warning', message: 'Fan switched to manual override mode', timestamp: new Date(Date.now() - 7200000).toISOString() },
 ];
 
 export const mockSettings: SystemSettings = {

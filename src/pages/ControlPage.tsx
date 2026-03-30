@@ -4,8 +4,9 @@ import { mockLatestReading } from '@/data/mockData';
 import { api } from '@/services/api';
 import { useAuth } from '@/context/AuthContext';
 import { cn } from '@/lib/utils';
-import { AlertTriangle, CheckCircle, Loader2 } from 'lucide-react';
+import { AlertTriangle, CheckCircle, Loader2, ShieldCheck } from 'lucide-react';
 import { Switch } from '@/components/ui/switch';
+import { Slider } from '@/components/ui/slider';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -27,8 +28,6 @@ export default function ControlPage() {
   const [showConfirm, setShowConfirm] = useState(false);
   const [applying, setApplying] = useState(false);
   const [applied, setApplied] = useState(false);
-
-  const damperError = damperAngle < 0 || damperAngle > 90;
 
   const handleApply = async () => {
     setShowConfirm(false);
@@ -58,6 +57,30 @@ export default function ControlPage() {
       )}
 
       <div className="max-w-xl space-y-6">
+        {/* Current Status */}
+        <div className="panel p-5">
+          <div className="flex items-center gap-2 mb-3">
+            <ShieldCheck className="h-4 w-4 text-primary" />
+            <label className="text-xs text-muted-foreground uppercase tracking-wider">Active Command Status</label>
+          </div>
+          <div className="grid grid-cols-3 gap-4 text-sm">
+            <div>
+              <p className="text-muted-foreground text-xs">Mode</p>
+              <p className="font-mono font-semibold text-foreground">{mode}</p>
+            </div>
+            <div>
+              <p className="text-muted-foreground text-xs">Fan</p>
+              <p className={cn('font-mono font-semibold', fanOn ? 'text-success' : 'text-muted-foreground')}>
+                {fanOn ? 'ON' : 'OFF'}
+              </p>
+            </div>
+            <div>
+              <p className="text-muted-foreground text-xs">Damper</p>
+              <p className="font-mono font-semibold text-foreground">{damperAngle}°</p>
+            </div>
+          </div>
+        </div>
+
         {/* Mode Toggle */}
         <div className="panel p-5">
           <label className="block text-xs text-muted-foreground uppercase tracking-wider mb-3">Control Mode</label>
@@ -68,71 +91,67 @@ export default function ControlPage() {
                 onClick={() => canControl && setMode(m)}
                 disabled={!canControl}
                 className={cn(
-                  'flex-1 py-3 rounded-md text-sm font-semibold transition-all',
+                  'flex-1 py-3.5 rounded-md text-sm font-semibold transition-all border',
                   mode === m
-                    ? 'bg-primary text-primary-foreground'
-                    : 'bg-muted text-muted-foreground hover:bg-muted/80',
+                    ? 'bg-primary text-primary-foreground border-primary shadow-lg shadow-primary/20'
+                    : 'bg-muted text-muted-foreground border-border hover:bg-muted/80 hover:border-primary/30',
                   !canControl && 'opacity-50 cursor-not-allowed'
                 )}
               >
-                {m}
+                {m === 'AUTO' ? '⚙ AUTO' : '✋ MANUAL'}
               </button>
             ))}
           </div>
           <p className="text-xs text-muted-foreground mt-2">
-            {mode === 'AUTO' ? 'System regulates automatically based on CO₂ levels.' : 'Manual override enabled — you control fan and damper.'}
+            {mode === 'AUTO' ? 'System regulates automatically based on CO₂ levels.' : 'Manual override enabled — you control fan and damper directly.'}
           </p>
         </div>
 
         {/* Manual Controls */}
         {mode === 'MANUAL' && (
-          <div className="panel p-5 space-y-5">
+          <div className="panel p-5 space-y-6">
             {/* Fan ON/OFF */}
             <div>
-              <label className="block text-xs text-muted-foreground uppercase tracking-wider mb-3">
-                Fan Control
-              </label>
+              <label className="block text-xs text-muted-foreground uppercase tracking-wider mb-3">Fan Control</label>
               <div className="flex items-center justify-between bg-muted rounded-md px-4 py-3">
                 <div>
                   <p className="text-sm font-semibold text-foreground">
-                    Fan is {fanOn ? 'ON' : 'OFF'}
+                    Fan is <span className={fanOn ? 'text-success' : 'text-destructive'}>{fanOn ? 'ON' : 'OFF'}</span>
                   </p>
                   <p className="text-xs text-muted-foreground">
                     {fanOn ? 'Exhaust fan is running' : 'Exhaust fan is stopped'}
                   </p>
                 </div>
-                <Switch
-                  checked={fanOn}
-                  onCheckedChange={setFanOn}
-                  disabled={!canControl}
-                />
+                <Switch checked={fanOn} onCheckedChange={setFanOn} disabled={!canControl} />
               </div>
             </div>
 
-            {/* Damper Angle */}
+            {/* Damper Angle Slider */}
             <div>
-              <label className="block text-xs text-muted-foreground uppercase tracking-wider mb-1.5">
-                Damper Angle (0–90°)
-              </label>
-              <input
-                type="number"
+              <div className="flex items-center justify-between mb-3">
+                <label className="text-xs text-muted-foreground uppercase tracking-wider">Damper Angle</label>
+                <span className="text-sm font-mono font-semibold text-foreground">{damperAngle}°</span>
+              </div>
+              <Slider
+                value={[damperAngle]}
+                onValueChange={([v]) => setDamperAngle(v)}
                 min={0}
                 max={90}
-                value={damperAngle}
-                onChange={e => setDamperAngle(Number(e.target.value))}
+                step={1}
                 disabled={!canControl}
-                className={cn(
-                  'w-full px-3 py-2.5 bg-muted border rounded-md text-sm text-foreground font-mono focus:outline-none focus:ring-1 focus:ring-primary transition-colors',
-                  damperError ? 'border-destructive' : 'border-border'
-                )}
+                className="w-full"
               />
-              {damperError && <p className="text-xs text-destructive mt-1">Must be 0–90</p>}
+              <div className="flex justify-between text-xs text-muted-foreground mt-1.5 font-mono">
+                <span>0° Closed</span>
+                <span>45° Half</span>
+                <span>90° Open</span>
+              </div>
             </div>
 
             <button
               onClick={() => setShowConfirm(true)}
-              disabled={!canControl || damperError || applying}
-              className="w-full py-2.5 bg-primary text-primary-foreground rounded-md text-sm font-semibold hover:opacity-90 disabled:opacity-50 transition-opacity flex items-center justify-center gap-2"
+              disabled={!canControl || applying}
+              className="w-full py-3 bg-primary text-primary-foreground rounded-md text-sm font-semibold hover:opacity-90 disabled:opacity-50 transition-opacity flex items-center justify-center gap-2"
             >
               {applying && <Loader2 className="h-4 w-4 animate-spin" />}
               Apply Manual Override
