@@ -16,14 +16,26 @@ const API_BASE = '';
 export const api = {
   // ── Frontend APIs ──────────────────────────
 
+  /** Get latest sensor reading (from ESP32 via server) */
   async getLatestReading(): Promise<SensorReading> {
+    // TODO: Replace with fetch(`${API_BASE}/api/readings/latest`)
     await delay(200);
     return { ...mockLatestReading, timestamp: new Date().toISOString() };
   },
 
+  /** Get historical readings for logs/chart */
   async getHistoricalReadings(count?: number): Promise<SensorReading[]> {
+    // TODO: Replace with fetch(`${API_BASE}/api/readings?limit=${count}`)
     await delay(300);
     return generateHistoricalReadings(count);
+  },
+
+  /** Clear all stored logs */
+  async clearLogs(): Promise<{ success: boolean }> {
+    // TODO: Replace with fetch(`${API_BASE}/api/readings`, { method: 'DELETE' })
+    await delay(400);
+    console.log('[API] Logs cleared');
+    return { success: true };
   },
 
   async getSystemStatus(): Promise<SystemStatus> {

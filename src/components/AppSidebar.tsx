@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { LayoutDashboard, ScrollText, Sliders, Settings, LogOut, ChevronLeft, ChevronRight, Shield } from 'lucide-react';
+import { LayoutDashboard, ScrollText, Sliders, Settings, LogOut, ChevronLeft, ChevronRight, Shield, FileCode2 } from 'lucide-react';
 import { SidebarNavItem } from './SidebarNavItem';
 import { useAuth } from '@/context/AuthContext';
 import { cn } from '@/lib/utils';
@@ -12,6 +12,7 @@ export function AppSidebar() {
     { to: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
     { to: '/logs', icon: ScrollText, label: 'Data Logs' },
     { to: '/control', icon: Sliders, label: 'Control' },
+    { to: '/design', icon: FileCode2, label: 'System Design' },
     { to: '/settings', icon: Settings, label: 'Settings' },
   ];
 
