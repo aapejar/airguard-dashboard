@@ -3,10 +3,11 @@ import { SensorCard } from '@/components/SensorCard';
 import { CO2Chart } from '@/components/CO2Chart';
 import { AlertsPanel } from '@/components/AlertsPanel';
 import { SystemStatusPanel } from '@/components/SystemStatusPanel';
-import { LogsTable } from '@/components/LogsTable';
 import { Wind, Fan, Gauge, Activity, ToggleRight } from 'lucide-react';
 import { mockAlerts } from '@/data/mockData';
 import { useLiveData } from '@/hooks/useLiveData';
+import { generateHistoricalReadings } from '@/data/mockData';
+import { useState } from 'react';
 
 function getCO2Status(val: number): 'normal' | 'warning' | 'critical' {
   if (val >= 1000) return 'critical';
@@ -15,7 +16,9 @@ function getCO2Status(val: number): 'normal' | 'warning' | 'critical' {
 }
 
 export default function DashboardPage() {
-  const { latest, history, status } = useLiveData(5000);
+  const { latest, status } = useLiveData(5000);
+  // Historical data for chart — mock until backend is connected
+  const [history] = useState(() => generateHistoricalReadings(30));
 
   return (
     <DashboardLayout>
@@ -27,13 +30,15 @@ export default function DashboardPage() {
         </div>
         <div className="flex items-center gap-2">
           <span className="h-2 w-2 rounded-full bg-success animate-pulse-glow" />
-          <span className="text-xs text-muted-foreground font-mono">Live</span>
+          <span className="text-xs text-muted-foreground font-mono">
+            {status.deviceOnline ? 'Connected' : 'Offline'}
+          </span>
         </div>
       </div>
 
-      {/* Primary: Indoor CO2 highlight */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
-        <div className="md:col-span-1">
+      {/* Primary: Indoor CO2 highlight + secondary cards */}
+      <div className="grid grid-cols-1 lg:grid-cols-4 gap-3 mb-3">
+        <div className="lg:col-span-1">
           <SensorCard
             label="Indoor CO₂"
             value={latest.indoorCO2}
@@ -44,7 +49,7 @@ export default function DashboardPage() {
             highlight
           />
         </div>
-        <div className="md:col-span-2 grid grid-cols-2 lg:grid-cols-3 gap-3">
+        <div className="lg:col-span-3 grid grid-cols-2 md:grid-cols-3 gap-3">
           <SensorCard label="Outdoor CO₂" value={latest.outdoorCO2} unit="ppm" icon={Wind} status="normal" />
           <SensorCard
             label="Fan Status"
@@ -69,7 +74,7 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* Chart + Alerts + Status */}
+      {/* Chart + Status + Alerts */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
         <div className="lg:col-span-2">
           <CO2Chart data={history} />
@@ -79,9 +84,6 @@ export default function DashboardPage() {
           <AlertsPanel alerts={mockAlerts} />
         </div>
       </div>
-
-      {/* Logs */}
-      <LogsTable data={history} maxRows={8} />
     </DashboardLayout>
   );
 }

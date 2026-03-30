@@ -8,6 +8,7 @@ import DashboardPage from "@/pages/DashboardPage";
 import DataLogsPage from "@/pages/DataLogsPage";
 import ControlPage from "@/pages/ControlPage";
 import SettingsPage from "@/pages/SettingsPage";
+import SystemDesignPage from "@/pages/SystemDesignPage";
 import NotFound from "@/pages/NotFound";
 import type { ReactNode } from "react";
 
@@ -28,6 +29,7 @@ function AppRoutes() {
       <Route path="/dashboard" element={<ProtectedRoute><DashboardPage /></ProtectedRoute>} />
       <Route path="/logs" element={<ProtectedRoute><DataLogsPage /></ProtectedRoute>} />
       <Route path="/control" element={<ProtectedRoute><ControlPage /></ProtectedRoute>} />
+      <Route path="/design" element={<ProtectedRoute><SystemDesignPage /></ProtectedRoute>} />
       <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
       <Route path="*" element={<NotFound />} />
     </Routes>
