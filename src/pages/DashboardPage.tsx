@@ -4,10 +4,7 @@ import { CO2Chart } from '@/components/CO2Chart';
 import { AlertsPanel } from '@/components/AlertsPanel';
 import { SystemStatusPanel } from '@/components/SystemStatusPanel';
 import { Wind, Fan, Gauge, Activity, ToggleRight } from 'lucide-react';
-import { mockAlerts } from '@/data/mockData';
-import { useLiveData } from '@/hooks/useLiveData';
-import { generateHistoricalReadings } from '@/data/mockData';
-import { useState } from 'react';
+import { useDevice } from '@/context/DeviceContext';
 
 function getCO2Status(val: number): 'normal' | 'warning' | 'critical' {
   if (val >= 1000) return 'critical';
@@ -16,9 +13,7 @@ function getCO2Status(val: number): 'normal' | 'warning' | 'critical' {
 }
 
 export default function DashboardPage() {
-  const { latest, status } = useLiveData(5000);
-  // Historical data for chart — mock until backend is connected
-  const [history] = useState(() => generateHistoricalReadings(30));
+  const { latest, status, history, alerts } = useDevice();
 
   return (
     <DashboardLayout>
@@ -81,7 +76,7 @@ export default function DashboardPage() {
         </div>
         <div className="space-y-4">
           <SystemStatusPanel status={status} />
-          <AlertsPanel alerts={mockAlerts} />
+          <AlertsPanel alerts={alerts} />
         </div>
       </div>
     </DashboardLayout>

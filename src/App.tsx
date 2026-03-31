@@ -42,9 +42,11 @@ const App = () => (
     <TooltipProvider>
       <Sonner />
       <AuthProvider>
-        <BrowserRouter>
-          <AppRoutes />
-        </BrowserRouter>
+        <DeviceProvider>
+          <BrowserRouter>
+            <AppRoutes />
+          </BrowserRouter>
+        </DeviceProvider>
       </AuthProvider>
     </TooltipProvider>
   </QueryClientProvider>
