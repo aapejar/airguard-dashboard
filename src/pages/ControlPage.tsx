@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { DashboardLayout } from '@/components/DashboardLayout';
-import { mockLatestReading } from '@/data/mockData';
-import { api } from '@/services/api';
+import { useDevice } from '@/context/DeviceContext';
 import { useAuth } from '@/context/AuthContext';
 import { cn } from '@/lib/utils';
 import { AlertTriangle, CheckCircle, Loader2, ShieldCheck } from 'lucide-react';
@@ -20,26 +19,34 @@ import {
 
 export default function ControlPage() {
   const { user } = useAuth();
+  const { latest, sendCommand } = useDevice();
   const canControl = user?.role === 'admin' || user?.role === 'operator';
 
-  const [mode, setMode] = useState<'AUTO' | 'MANUAL'>(mockLatestReading.controlMode);
-  const [fanOn, setFanOn] = useState(mockLatestReading.fanStatus === 'ON');
-  const [damperAngle, setDamperAngle] = useState(mockLatestReading.damperAngle);
+  // Local form state initialised from device state
+  const [mode, setMode] = useState<'AUTO' | 'MANUAL'>(latest.controlMode);
+  const [fanOn, setFanOn] = useState(latest.fanStatus === 'ON');
+  const [damperAngle, setDamperAngle] = useState(latest.damperAngle);
   const [showConfirm, setShowConfirm] = useState(false);
   const [applying, setApplying] = useState(false);
   const [applied, setApplied] = useState(false);
+  const [cmdError, setCmdError] = useState<string | null>(null);
 
   const handleApply = async () => {
     setShowConfirm(false);
     setApplying(true);
-    await api.sendControlCommand({
+    setCmdError(null);
+    const ok = await sendCommand({
       controlMode: mode,
       fanStatus: fanOn ? 'ON' : 'OFF',
       damperAngle,
     });
     setApplying(false);
-    setApplied(true);
-    setTimeout(() => setApplied(false), 3000);
+    if (ok) {
+      setApplied(true);
+      setTimeout(() => setApplied(false), 3000);
+    } else {
+      setCmdError('Failed to apply command. Please try again.');
+    }
   };
 
   return (
@@ -66,17 +73,17 @@ export default function ControlPage() {
           <div className="grid grid-cols-3 gap-4 text-sm">
             <div>
               <p className="text-muted-foreground text-xs">Mode</p>
-              <p className="font-mono font-semibold text-foreground">{mode}</p>
+              <p className="font-mono font-semibold text-foreground">{latest.controlMode}</p>
             </div>
             <div>
               <p className="text-muted-foreground text-xs">Fan</p>
-              <p className={cn('font-mono font-semibold', fanOn ? 'text-success' : 'text-muted-foreground')}>
-                {fanOn ? 'ON' : 'OFF'}
+              <p className={cn('font-mono font-semibold', latest.fanStatus === 'ON' ? 'text-success' : 'text-muted-foreground')}>
+                {latest.fanStatus}
               </p>
             </div>
             <div>
               <p className="text-muted-foreground text-xs">Damper</p>
-              <p className="font-mono font-semibold text-foreground">{damperAngle}°</p>
+              <p className="font-mono font-semibold text-foreground">{latest.damperAngle}°</p>
             </div>
           </div>
         </div>
@@ -161,6 +168,12 @@ export default function ControlPage() {
               <div className="flex items-center gap-2 text-sm text-success">
                 <CheckCircle className="h-4 w-4" />
                 Command applied successfully
+              </div>
+            )}
+            {cmdError && (
+              <div className="flex items-center gap-2 text-sm text-destructive">
+                <AlertTriangle className="h-4 w-4" />
+                {cmdError}
               </div>
             )}
           </div>
