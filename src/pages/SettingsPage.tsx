@@ -2,10 +2,12 @@ import { useState } from 'react';
 import { DashboardLayout } from '@/components/DashboardLayout';
 import { mockSettings } from '@/data/mockData';
 import { api } from '@/services/api';
+import { useDevice } from '@/context/DeviceContext';
 import type { SystemSettings } from '@/types/sensor';
 import { CheckCircle, Loader2, AlertTriangle } from 'lucide-react';
 
 export default function SettingsPage() {
+  const { deviceId } = useDevice();
   const [settings, setSettings] = useState<SystemSettings>({ ...mockSettings });
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -35,7 +37,7 @@ export default function SettingsPage() {
   const handleSave = async () => {
     if (!validate()) return;
     setSaving(true);
-    await api.updateSettings(settings);
+    await api.updateSettings(deviceId, settings);
     setSaving(false);
     setSaved(true);
     setTimeout(() => setSaved(false), 3000);

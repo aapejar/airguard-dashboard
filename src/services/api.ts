@@ -8,63 +8,106 @@ import type {
   DeviceHeartbeatPayload,
   DeviceCommandResponse,
 } from '@/types/sensor';
+import { config } from '@/config';
+import { validateSensorReading, validateSystemStatus } from '@/services/validators';
 import { mockLatestReading, mockSystemStatus, mockSettings, generateHistoricalReadings } from '@/data/mockData';
 
-const API_BASE = '';
+// ── Helpers ─────────────────────────────────────────────
 
-/**
- * Simulate network latency (replaced with real fetch when backend is connected).
- * Uses a randomised range for realism.
- */
+/** Simulate network latency (mock only) */
 const delay = (min = 200, max = 500) =>
-  new Promise(r => setTimeout(r, Math.round(Math.random() * (max - min) + min)));
+  new Promise<void>(r => setTimeout(r, Math.round(Math.random() * (max - min) + min)));
 
-/**
- * Wraps a fetch-like call with basic error handling.
- * When a real backend is available, swap the body of each method
- * with `return fetchJson(`${API_BASE}/api/…`)`.
- */
-async function fetchJson<T>(_url: string, _opts?: RequestInit): Promise<T> {
-  // TODO: uncomment when real backend is available
-  // const res = await fetch(url, { ...opts, headers: { 'Content-Type': 'application/json', ...opts?.headers } });
-  // if (!res.ok) throw new Error(`API ${res.status}: ${res.statusText}`);
-  // return res.json();
-  throw new Error('Real API not connected — using mock fallback');
+/** Fetch with timeout + retry */
+async function fetchWithRetry<T>(
+  url: string,
+  opts?: RequestInit,
+  retries = config.maxRetries,
+): Promise<T> {
+  let lastError: Error | null = null;
+
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), config.requestTimeout);
+
+      const res = await fetch(url, {
+        ...opts,
+        signal: controller.signal,
+        headers: { 'Content-Type': 'application/json', ...opts?.headers },
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!res.ok) {
+        throw new Error(`API ${res.status}: ${res.statusText}`);
+      }
+
+      return (await res.json()) as T;
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+
+      // Don't retry on abort (timeout) beyond the last attempt
+      if (attempt < retries) {
+        await new Promise<void>(r => setTimeout(r, config.retryBaseDelay * (attempt + 1)));
+      }
+    }
+  }
+
+  throw lastError ?? new Error('Request failed');
 }
 
 /** Incrementing counter so every mock reading has a unique id */
 let _readingSeq = 1000;
+/** Timestamp used to compute mock uptime delta */
+const _bootTime = Date.now();
+
+// ── Public API ──────────────────────────────────────────
 
 export const api = {
-  // ── Frontend → Server APIs ─────────────────────────
+  // ── Frontend → Server ─────────────────────────────
 
-  async getLatestReading(): Promise<SensorReading> {
+  async getLatestReading(deviceId?: string): Promise<SensorReading> {
+    const id = deviceId ?? config.defaultDeviceId;
     try {
-      return await fetchJson<SensorReading>(`${API_BASE}/api/readings/latest`);
+      const raw = await fetchWithRetry<unknown>(
+        `${config.apiBaseUrl}/api/devices/${id}/readings/latest`,
+      );
+      const validated = validateSensorReading(raw);
+      if (!validated) throw new Error('Invalid reading payload from server');
+      return validated;
     } catch {
-      // Mock fallback — return a stable snapshot with updated timestamp
+      // Mock fallback
       await delay(150, 300);
       _readingSeq++;
       return {
         ...mockLatestReading,
         id: `reading-${_readingSeq}`,
+        deviceId: id,
         timestamp: new Date().toISOString(),
       };
     }
   },
 
-  async getHistoricalReadings(count?: number): Promise<SensorReading[]> {
+  async getHistoricalReadings(deviceId?: string, count?: number): Promise<SensorReading[]> {
+    const id = deviceId ?? config.defaultDeviceId;
     try {
-      return await fetchJson<SensorReading[]>(`${API_BASE}/api/readings?limit=${count ?? 50}`);
+      return await fetchWithRetry<SensorReading[]>(
+        `${config.apiBaseUrl}/api/devices/${id}/readings?limit=${count ?? 50}`,
+      );
     } catch {
       await delay(200, 400);
       return generateHistoricalReadings(count);
     }
   },
 
-  async clearLogs(): Promise<{ success: boolean }> {
+  async clearLogs(deviceId?: string): Promise<{ success: boolean }> {
+    const id = deviceId ?? config.defaultDeviceId;
     try {
-      return await fetchJson<{ success: boolean }>(`${API_BASE}/api/readings`, { method: 'DELETE' });
+      return await fetchWithRetry<{ success: boolean }>(
+        `${config.apiBaseUrl}/api/devices/${id}/readings`,
+        { method: 'DELETE' },
+      );
     } catch {
       await delay(200, 400);
       console.log('[API] Logs cleared (mock)');
@@ -72,9 +115,15 @@ export const api = {
     }
   },
 
-  async getSystemStatus(): Promise<SystemStatus> {
+  async getSystemStatus(deviceId?: string): Promise<SystemStatus> {
+    const id = deviceId ?? config.defaultDeviceId;
     try {
-      return await fetchJson<SystemStatus>(`${API_BASE}/api/status`);
+      const raw = await fetchWithRetry<unknown>(
+        `${config.apiBaseUrl}/api/devices/${id}/status`,
+      );
+      const validated = validateSystemStatus(raw);
+      if (!validated) throw new Error('Invalid status payload from server');
+      return validated;
     } catch {
       await delay(100, 200);
       return {
@@ -85,21 +134,25 @@ export const api = {
     }
   },
 
-  async getSettings(): Promise<SystemSettings> {
+  async getSettings(deviceId?: string): Promise<SystemSettings> {
+    const id = deviceId ?? config.defaultDeviceId;
     try {
-      return await fetchJson<SystemSettings>(`${API_BASE}/api/settings`);
+      return await fetchWithRetry<SystemSettings>(
+        `${config.apiBaseUrl}/api/devices/${id}/settings`,
+      );
     } catch {
       await delay(100, 200);
       return { ...mockSettings };
     }
   },
 
-  async updateSettings(settings: SystemSettings): Promise<{ success: boolean }> {
+  async updateSettings(deviceId: string | undefined, settings: SystemSettings): Promise<{ success: boolean }> {
+    const id = deviceId ?? config.defaultDeviceId;
     try {
-      return await fetchJson<{ success: boolean }>(`${API_BASE}/api/settings`, {
-        method: 'PUT',
-        body: JSON.stringify(settings),
-      });
+      return await fetchWithRetry<{ success: boolean }>(
+        `${config.apiBaseUrl}/api/devices/${id}/settings`,
+        { method: 'PUT', body: JSON.stringify(settings) },
+      );
     } catch {
       await delay(300, 600);
       console.log('[API] Settings updated (mock):', settings);
@@ -107,12 +160,13 @@ export const api = {
     }
   },
 
-  async sendControlCommand(command: ControlCommand): Promise<{ success: boolean }> {
+  async sendControlCommand(deviceId: string | undefined, command: ControlCommand): Promise<{ success: boolean }> {
+    const id = deviceId ?? config.defaultDeviceId;
     try {
-      return await fetchJson<{ success: boolean }>(`${API_BASE}/api/control`, {
-        method: 'POST',
-        body: JSON.stringify(command),
-      });
+      return await fetchWithRetry<{ success: boolean }>(
+        `${config.apiBaseUrl}/api/devices/${id}/control`,
+        { method: 'POST', body: JSON.stringify(command) },
+      );
     } catch {
       await delay(400, 800);
       console.log('[API] Control command sent (mock):', command);
@@ -120,12 +174,12 @@ export const api = {
     }
   },
 
-  async login(username: string, _password: string): Promise<User | null> {
+  async login(username: string, password: string): Promise<User | null> {
     try {
-      return await fetchJson<User>(`${API_BASE}/api/auth/login`, {
-        method: 'POST',
-        body: JSON.stringify({ username, password: _password }),
-      });
+      return await fetchWithRetry<User>(
+        `${config.apiBaseUrl}/api/auth/login`,
+        { method: 'POST', body: JSON.stringify({ username, password }) },
+      );
     } catch {
       await delay(400, 700);
       const users: Record<string, User> = {
@@ -137,14 +191,14 @@ export const api = {
     }
   },
 
-  // ── ESP32 Device → Server APIs ─────────────────────
+  // ── ESP32 Device → Server ─────────────────────────
 
   async postDeviceReading(payload: DeviceReadingPayload): Promise<{ success: boolean }> {
     try {
-      return await fetchJson<{ success: boolean }>(`${API_BASE}/api/device/readings`, {
-        method: 'POST',
-        body: JSON.stringify(payload),
-      });
+      return await fetchWithRetry<{ success: boolean }>(
+        `${config.apiBaseUrl}/api/device/readings`,
+        { method: 'POST', body: JSON.stringify(payload) },
+      );
     } catch {
       await delay(100, 200);
       console.log('[API][Device] Reading received (mock):', payload);
@@ -154,10 +208,10 @@ export const api = {
 
   async postDeviceHeartbeat(payload: DeviceHeartbeatPayload): Promise<{ success: boolean }> {
     try {
-      return await fetchJson<{ success: boolean }>(`${API_BASE}/api/device/heartbeat`, {
-        method: 'POST',
-        body: JSON.stringify(payload),
-      });
+      return await fetchWithRetry<{ success: boolean }>(
+        `${config.apiBaseUrl}/api/device/heartbeat`,
+        { method: 'POST', body: JSON.stringify(payload) },
+      );
     } catch {
       await delay(50, 150);
       console.log('[API][Device] Heartbeat received (mock):', payload);
@@ -167,7 +221,9 @@ export const api = {
 
   async getDeviceCommand(deviceId: string): Promise<DeviceCommandResponse> {
     try {
-      return await fetchJson<DeviceCommandResponse>(`${API_BASE}/api/device/${deviceId}/command`);
+      return await fetchWithRetry<DeviceCommandResponse>(
+        `${config.apiBaseUrl}/api/device/${deviceId}/command`,
+      );
     } catch {
       await delay(100, 200);
       return {
@@ -179,6 +235,3 @@ export const api = {
     }
   },
 };
-
-/** Timestamp used to compute mock uptime delta */
-const _bootTime = Date.now();

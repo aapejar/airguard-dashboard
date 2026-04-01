@@ -1,10 +1,10 @@
 import { createContext, useContext, useState, useCallback, useEffect, useRef, type ReactNode } from 'react';
 import type { SensorReading, SystemStatus, ControlCommand, AlertItem } from '@/types/sensor';
+import { config } from '@/config';
 import { api } from '@/services/api';
 import { generateHistoricalReadings, mockAlerts } from '@/data/mockData';
 
-/** How long (ms) before we consider the device offline */
-const HEARTBEAT_TIMEOUT = 15_000;
+// ── Types ────────────────────────────────────────────────
 
 interface DeviceState {
   latest: SensorReading;
@@ -12,11 +12,17 @@ interface DeviceState {
   history: SensorReading[];
   alerts: AlertItem[];
   isLoading: boolean;
+  /** True while a control command is in flight */
+  isCommandPending: boolean;
   error: string | null;
 }
 
 interface DeviceContextType extends DeviceState {
-  /** Send a control command; returns true on success */
+  /** Active device ID */
+  deviceId: string;
+  /** Switch to a different device */
+  setDeviceId: (id: string) => void;
+  /** Send a control command; returns true on success. Debounced — rejects while pending. */
   sendCommand: (cmd: ControlCommand) => Promise<boolean>;
   /** Clear all historical logs */
   clearHistory: () => void;
@@ -31,7 +37,7 @@ const seededHistory = generateHistoricalReadings(50);
 
 const initialReading: SensorReading = {
   id: 'initial-001',
-  deviceId: 'esp32-room-01',
+  deviceId: config.defaultDeviceId,
   indoorCO2: 633.8,
   outdoorCO2: 380.3,
   fanStatus: 'ON',
@@ -49,22 +55,38 @@ const initialStatus: SystemStatus = {
   wifiSignal: -42,
 };
 
+// ── Deduplication helper ─────────────────────────────────
+function appendUnique(
+  existing: SensorReading[],
+  incoming: SensorReading,
+  maxSize: number,
+): SensorReading[] {
+  if (existing.some(r => r.id === incoming.id)) return existing;
+  const next = [...existing, incoming];
+  return next.length > maxSize ? next.slice(next.length - maxSize) : next;
+}
+
+// ── Provider ─────────────────────────────────────────────
+
 export function DeviceProvider({ children }: { children: ReactNode }) {
+  const [deviceId, setDeviceId] = useState(config.defaultDeviceId);
   const [latest, setLatest] = useState<SensorReading>(initialReading);
   const [status, setStatus] = useState<SystemStatus>(initialStatus);
   const [history, setHistory] = useState<SensorReading[]>(seededHistory);
   const [alerts, setAlerts] = useState<AlertItem[]>([...mockAlerts]);
   const [isLoading, setIsLoading] = useState(false);
+  const [isCommandPending, setIsCommandPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const lastHeartbeatRef = useRef<number>(Date.now());
+  const commandLockRef = useRef(false);
 
-  // ── Fetch latest reading from service layer ──────────
+  // ── Fetch latest reading ───────────────────────────
   const refresh = useCallback(async () => {
     try {
       const [reading, sysStatus] = await Promise.all([
-        api.getLatestReading(),
-        api.getSystemStatus(),
+        api.getLatestReading(deviceId),
+        api.getSystemStatus(deviceId),
       ]);
 
       setLatest(reading);
@@ -72,47 +94,51 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
       setError(null);
       lastHeartbeatRef.current = Date.now();
 
-      // Append to history (avoid duplicates by id)
-      setHistory(prev => {
-        if (prev.some(r => r.id === reading.id)) return prev;
-        return [...prev, reading];
-      });
+      setHistory(prev => appendUnique(prev, reading, config.maxHistorySize));
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Failed to fetch data';
       setError(msg);
       console.error('[DeviceContext] refresh error:', msg);
     }
-  }, []);
+  }, [deviceId]);
 
-  // ── Polling loop ─────────────────────────────────────
+  // ── Polling loop ───────────────────────────────────
   useEffect(() => {
-    // Initial fetch
     setIsLoading(true);
     refresh().finally(() => setIsLoading(false));
 
-    const pollId = setInterval(refresh, 5000);
+    const pollId = setInterval(refresh, config.pollingInterval);
     return () => clearInterval(pollId);
   }, [refresh]);
 
-  // ── Heartbeat-based online/offline detection ─────────
+  // ── Heartbeat-based offline detection ──────────────
   useEffect(() => {
     const checkId = setInterval(() => {
       const elapsed = Date.now() - lastHeartbeatRef.current;
       setStatus(prev => ({
         ...prev,
-        deviceOnline: elapsed < HEARTBEAT_TIMEOUT,
+        deviceOnline: elapsed < config.heartbeatTimeout,
       }));
     }, 3000);
     return () => clearInterval(checkId);
   }, []);
 
-  // ── Send control command ─────────────────────────────
+  // ── Send control command (with lock) ───────────────
   const sendCommand = useCallback(async (cmd: ControlCommand): Promise<boolean> => {
+    // Prevent duplicate rapid commands
+    if (commandLockRef.current) {
+      console.warn('[DeviceContext] Command rejected — another command is in progress');
+      return false;
+    }
+
+    commandLockRef.current = true;
+    setIsCommandPending(true);
+
     try {
-      setIsLoading(true);
-      const result = await api.sendControlCommand(cmd);
+      const result = await api.sendControlCommand(deviceId, cmd);
+
       if (result.success) {
-        // Reflect command in latest state immediately
+        // Update state from confirmed command (server-confirmed, not optimistic)
         setLatest(prev => ({
           ...prev,
           controlMode: cmd.controlMode,
@@ -121,7 +147,6 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
           timestamp: new Date().toISOString(),
         }));
 
-        // Log the control action
         const newAlert: AlertItem = {
           id: `ctrl-${Date.now()}`,
           level: 'info',
@@ -130,6 +155,7 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
         };
         setAlerts(prev => [newAlert, ...prev]);
       }
+
       setError(null);
       return result.success;
     } catch (err) {
@@ -137,18 +163,32 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
       setError(msg);
       return false;
     } finally {
-      setIsLoading(false);
+      commandLockRef.current = false;
+      setIsCommandPending(false);
     }
-  }, []);
+  }, [deviceId]);
 
-  // ── Clear history ────────────────────────────────────
+  // ── Clear history ──────────────────────────────────
   const clearHistory = useCallback(() => {
     setHistory([]);
   }, []);
 
   return (
     <DeviceContext.Provider
-      value={{ latest, status, history, alerts, isLoading, error, sendCommand, clearHistory, refresh }}
+      value={{
+        deviceId,
+        setDeviceId,
+        latest,
+        status,
+        history,
+        alerts,
+        isLoading,
+        isCommandPending,
+        error,
+        sendCommand,
+        clearHistory,
+        refresh,
+      }}
     >
       {children}
     </DeviceContext.Provider>

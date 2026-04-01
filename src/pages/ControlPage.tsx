@@ -19,35 +19,33 @@ import {
 
 export default function ControlPage() {
   const { user } = useAuth();
-  const { latest, sendCommand } = useDevice();
+  const { latest, sendCommand, isCommandPending } = useDevice();
   const canControl = user?.role === 'admin' || user?.role === 'operator';
 
-  // Local form state initialised from device state
   const [mode, setMode] = useState<'AUTO' | 'MANUAL'>(latest.controlMode);
   const [fanOn, setFanOn] = useState(latest.fanStatus === 'ON');
   const [damperAngle, setDamperAngle] = useState(latest.damperAngle);
   const [showConfirm, setShowConfirm] = useState(false);
-  const [applying, setApplying] = useState(false);
   const [applied, setApplied] = useState(false);
   const [cmdError, setCmdError] = useState<string | null>(null);
 
   const handleApply = async () => {
     setShowConfirm(false);
-    setApplying(true);
     setCmdError(null);
     const ok = await sendCommand({
       controlMode: mode,
       fanStatus: fanOn ? 'ON' : 'OFF',
       damperAngle,
     });
-    setApplying(false);
     if (ok) {
       setApplied(true);
       setTimeout(() => setApplied(false), 3000);
     } else {
-      setCmdError('Failed to apply command. Please try again.');
+      setCmdError(isCommandPending ? 'Another command is already in progress.' : 'Failed to apply command. Please try again.');
     }
   };
+
+  const isBusy = isCommandPending;
 
   return (
     <DashboardLayout>
@@ -157,11 +155,11 @@ export default function ControlPage() {
 
             <button
               onClick={() => setShowConfirm(true)}
-              disabled={!canControl || applying}
+              disabled={!canControl || isBusy}
               className="w-full py-3 bg-primary text-primary-foreground rounded-md text-sm font-semibold hover:opacity-90 disabled:opacity-50 transition-opacity flex items-center justify-center gap-2"
             >
-              {applying && <Loader2 className="h-4 w-4 animate-spin" />}
-              Apply Manual Override
+              {isBusy && <Loader2 className="h-4 w-4 animate-spin" />}
+              {isBusy ? 'Applying…' : 'Apply Manual Override'}
             </button>
 
             {applied && (
