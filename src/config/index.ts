@@ -43,6 +43,9 @@ const defaults: Record<Environment, AppConfig> = {
     heartbeatTimeout: 15_000,
     maxHistorySize: 500,
     defaultDeviceId: 'esp32-room-01',
+    sessionInactivityTimeout: 10 * 60 * 1000,
+    maxLoginAttempts: 3,
+    loginLockoutDuration: 60 * 1000,
   },
   production: {
     env: 'production',
@@ -54,6 +57,9 @@ const defaults: Record<Environment, AppConfig> = {
     heartbeatTimeout: 15_000,
     maxHistorySize: 1000,
     defaultDeviceId: 'esp32-room-01',
+    sessionInactivityTimeout: 10 * 60 * 1000,
+    maxLoginAttempts: 3,
+    loginLockoutDuration: 60 * 1000,
   },
 };
 
