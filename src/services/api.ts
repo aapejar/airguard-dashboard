@@ -185,7 +185,7 @@ export const api = {
       const users: Record<string, User> = {
         admin: { id: '1', username: 'admin', role: 'admin' },
         operator: { id: '2', username: 'operator', role: 'operator' },
-        viewer: { id: '3', username: 'viewer', role: 'viewer' },
+        viewer: { id: '3', username: 'viewer', role: 'user' },
       };
       return users[username] || null;
     }

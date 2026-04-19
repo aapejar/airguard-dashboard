@@ -20,11 +20,11 @@ export default function LoginPage() {
     setLoading(true);
     try {
       const result = await login(username, password);
-      if (result.ok) {
+      if ('ok' in result && result.ok) {
         navigate('/dashboard');
       } else if ('requires2FA' in result && result.requires2FA) {
         setPendingUser(result.pendingUser);
-      } else {
+      } else if ('error' in result) {
         setError(result.error);
       }
     } catch {
