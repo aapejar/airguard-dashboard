@@ -14,14 +14,20 @@ AirGuard Pro is a real-time air quality monitoring and ventilation control syste
 ## ✨ Features
 
 ### Authentication & Access Control
-- Structured username/password login with **session persistence** (localStorage)
-- **2FA simulation** for admin accounts (Authy-style 6-digit code, demo: `123456`)
-- Three roles with route-level protection:
+- Structured username/password authentication via dedicated `authService` (backend-ready surface — `login`, `verify2FA`, `logout`)
+- **No credentials exposed in the UI** — login screen displays "Authorized personnel only" instead of demo accounts
+- **Failed-attempt protection**: max 3 attempts, then automatic 60-second lockout (configurable in `src/config`)
+- **Session inactivity auto-logout** after 10 minutes of no user activity (mouse/keyboard/touch)
+- **2FA simulation** for admin accounts (TOTP-style 6-digit code) — service issues a `challengeId` and validates server-side-equivalent logic, ready to swap for real Authy / Google Authenticator
+- Session persistence via `localStorage` (`airguard.session`) with hydrate-on-mount
+- Three roles with route-level **and** UI-level enforcement:
   - **Admin** — full access (control, settings, user management, log deletion, threshold config)
   - **Operator** — dashboard, control panel, view/clear logs, threshold config (no settings/users)
   - **User** — read-only (dashboard + logs + system design)
-- **User Management** (admin only): create users, assign/change roles, delete users
-- Logout + auto-redirect on protected route access
+- **User Management** (admin only): create users, assign/change roles, delete users — every action audited
+- **Audit logging** of all auth events (login success/failure, 2FA challenge, invalid 2FA, logout, inactivity timeout, user CRUD) into the unified Recent Alerts feed
+- **Command attribution**: every control action and threshold change is logged with the acting username
+- Logout button always accessible in the sidebar; manual vs inactivity logout distinguished in the audit log
 
 ### Dashboard
 - Live indoor/outdoor CO₂ readings with status coloring (uses configurable thresholds)
@@ -115,13 +121,26 @@ src/
 
 ---
 
-## 🔐 Default Accounts
+## 🔐 Default Accounts (Development Only)
 
-| Username | Password | Role | 2FA |
-|---|---|---|---|
-| `admin` | `admin123` | admin | required (`123456`) |
-| `operator` | `operator123` | operator | – |
-| `viewer` | `user123` | user | – |
+> ⚠️ Internal credentials live in `src/services/authService.ts` and are **never** displayed in the UI.
+> In production these will be removed and authentication will be delegated to the backend.
+
+| Username   | Password      | Role     | 2FA                |
+|------------|---------------|----------|--------------------|
+| `admin`    | `admin123`    | admin    | required (`123456`) |
+| `operator` | `operator123` | operator | –                  |
+| `viewer`   | `user123`     | user     | –                  |
+
+### Security model
+
+| Concern                | Mechanism                                                                 |
+|------------------------|---------------------------------------------------------------------------|
+| Brute-force protection | Failed attempts persisted; lockout after `config.maxLoginAttempts` (3)    |
+| Session theft window   | Auto-logout after `config.sessionInactivityTimeout` (10 min) of no input  |
+| Privilege escalation   | RBAC enforced at route guard AND UI affordance level                      |
+| Audit trail            | All auth + control events flow through `auditBus` → unified alerts feed   |
+| Backend readiness      | `authService` mirrors REST shape (`login`/`verify2FA`/`logout`)           |
 
 ---
 
