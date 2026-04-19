@@ -243,16 +243,12 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
     (t: Partial<ControlThresholds>, actor?: string) => {
       setThresholds(prev => {
         const next = { ...prev, ...t };
-        return next;
-      });
-      // Log after state update — use the merged values via functional read
-      setThresholds(curr => {
         logEvent(
           'info',
-          `Thresholds updated: warn=${curr.warningThreshold}ppm, crit=${curr.criticalThreshold}ppm, hyst=${curr.hysteresis}ppm`,
+          `Thresholds updated: warn=${next.warningThreshold}ppm, crit=${next.criticalThreshold}ppm, hyst=${next.hysteresis}ppm`,
           { source: 'user', actor },
         );
-        return curr;
+        return next;
       });
     },
     [logEvent],
