@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useCallback, useEffect, useRef, type ReactNode } from 'react';
-import type { SensorReading, SystemStatus, ControlCommand, AlertItem } from '@/types/sensor';
+import type { SensorReading, SystemStatus, ControlCommand, AlertItem, AlertSource } from '@/types/sensor';
 import { config } from '@/config';
 import { api } from '@/services/api';
 import { generateHistoricalReadings, mockAlerts } from '@/data/mockData';
@@ -33,13 +33,19 @@ interface DeviceState {
 interface DeviceContextType extends DeviceState {
   deviceId: string;
   setDeviceId: (id: string) => void;
-  sendCommand: (cmd: ControlCommand) => Promise<boolean>;
+  sendCommand: (cmd: ControlCommand, actor?: string) => Promise<boolean>;
   clearHistory: () => void;
   clearAlerts: () => void;
   refresh: () => Promise<void>;
-  updateThresholds: (t: Partial<ControlThresholds>) => void;
+  updateThresholds: (t: Partial<ControlThresholds>, actor?: string) => void;
   /** Reset the cycle counter and re-arm seeded simulation */
   resumeSimulation: () => void;
+  /** Append a structured event to the audit log */
+  logEvent: (
+    level: AlertItem['level'],
+    message: string,
+    opts?: { source?: AlertSource; actor?: string },
+  ) => void;
 }
 
 const DeviceContext = createContext<DeviceContextType | null>(null);
