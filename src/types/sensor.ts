@@ -18,11 +18,17 @@ export interface SystemStatus {
   wifiSignal: number;
 }
 
+export type AlertSource = 'system' | 'device' | 'user' | 'auth';
+
 export interface AlertItem {
   id: string;
   level: 'info' | 'warning' | 'critical';
   message: string;
   timestamp: string;
+  /** Origin of the event — used for audit/log filtering */
+  source?: AlertSource;
+  /** Username that triggered the event, when applicable */
+  actor?: string;
 }
 
 export interface SystemSettings {

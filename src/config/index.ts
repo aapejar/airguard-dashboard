@@ -24,6 +24,12 @@ interface AppConfig {
   maxHistorySize: number;
   /** Default device ID when none is specified */
   defaultDeviceId: string;
+  /** Auto-logout after this many ms of inactivity */
+  sessionInactivityTimeout: number;
+  /** Maximum failed login attempts before temporary lockout */
+  maxLoginAttempts: number;
+  /** Lockout duration after exceeding max attempts (ms) */
+  loginLockoutDuration: number;
 }
 
 const defaults: Record<Environment, AppConfig> = {
