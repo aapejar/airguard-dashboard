@@ -18,7 +18,7 @@ import {
 } from '@/components/ui/alert-dialog';
 
 export default function ControlPage() {
-  const { hasRole } = useAuth();
+  const { hasRole, user } = useAuth();
   const { latest, sendCommand, isCommandPending, thresholds, updateThresholds } = useDevice();
   const canControl = hasRole('admin', 'operator');
   const canConfigureThresholds = hasRole('admin', 'operator');
@@ -40,7 +40,7 @@ export default function ControlPage() {
   const handleApply = async () => {
     setShowConfirm(false);
     setCmdError(null);
-    const ok = await sendCommand({ controlMode: mode, fanStatus: fanOn ? 'ON' : 'OFF', damperAngle });
+    const ok = await sendCommand({ controlMode: mode, fanStatus: fanOn ? 'ON' : 'OFF', damperAngle }, user?.username);
     if (ok) {
       setApplied(true);
       setTimeout(() => setApplied(false), 3000);
@@ -55,7 +55,7 @@ export default function ControlPage() {
     if (crit < 400 || crit > 5000) return setThrError('Critical must be between 400 and 5000 ppm');
     if (warn >= crit) return setThrError('Warning must be less than critical');
     if (hyst < 0 || hyst > 500) return setThrError('Hysteresis must be 0–500 ppm');
-    updateThresholds({ warningThreshold: warn, criticalThreshold: crit, hysteresis: hyst });
+    updateThresholds({ warningThreshold: warn, criticalThreshold: crit, hysteresis: hyst }, user?.username);
     setThrSaved(true);
     setTimeout(() => setThrSaved(false), 3000);
   };
