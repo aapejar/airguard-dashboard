@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useCallback, useEffect, useRef, type ReactNode } from 'react';
-import type { SensorReading, SystemStatus, ControlCommand, AlertItem } from '@/types/sensor';
+import type { SensorReading, SystemStatus, ControlCommand, AlertItem, AlertSource } from '@/types/sensor';
 import { config } from '@/config';
 import { api } from '@/services/api';
 import { generateHistoricalReadings, mockAlerts } from '@/data/mockData';
@@ -33,13 +33,19 @@ interface DeviceState {
 interface DeviceContextType extends DeviceState {
   deviceId: string;
   setDeviceId: (id: string) => void;
-  sendCommand: (cmd: ControlCommand) => Promise<boolean>;
+  sendCommand: (cmd: ControlCommand, actor?: string) => Promise<boolean>;
   clearHistory: () => void;
   clearAlerts: () => void;
   refresh: () => Promise<void>;
-  updateThresholds: (t: Partial<ControlThresholds>) => void;
+  updateThresholds: (t: Partial<ControlThresholds>, actor?: string) => void;
   /** Reset the cycle counter and re-arm seeded simulation */
   resumeSimulation: () => void;
+  /** Append a structured event to the audit log */
+  logEvent: (
+    level: AlertItem['level'],
+    message: string,
+    opts?: { source?: AlertSource; actor?: string },
+  ) => void;
 }
 
 const DeviceContext = createContext<DeviceContextType | null>(null);
@@ -108,6 +114,7 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
   const lastHeartbeatRef = useRef<number>(Date.now());
   const commandLockRef = useRef(false);
   const isReadyStateRef = useRef(false);
+  const cleanupRef = useRef<(() => void) | null>(null);
 
   // Persist thresholds
   useEffect(() => {
@@ -140,6 +147,7 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
               level: 'info',
               message: 'Seeded simulation completed — system ready, awaiting real device data',
               timestamp: new Date().toISOString(),
+              source: 'system',
             },
             ...a,
           ]);
@@ -160,6 +168,34 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
     return () => clearInterval(pollId);
   }, [refresh]);
 
+  // ── Subscribe to auth/audit events from outside the provider tree ─
+  useEffect(() => {
+    // Lazy import to avoid circular deps if any
+    let mounted = true;
+    import('@/services/auditBus').then(({ auditBus }) => {
+      if (!mounted) return;
+      const unsub = auditBus.subscribe(e => {
+        setAlerts(prev => [
+          {
+            id: `audit-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            level: e.level,
+            message: e.message,
+            timestamp: new Date().toISOString(),
+            source: e.source,
+            actor: e.actor,
+          },
+          ...prev,
+        ]);
+      });
+      // Store cleanup on the closure
+      cleanupRef.current = unsub;
+    });
+    return () => {
+      mounted = false;
+      cleanupRef.current?.();
+    };
+  }, []);
+
   // ── Heartbeat-based offline detection ──────────────
   useEffect(() => {
     const checkId = setInterval(() => {
@@ -169,64 +205,83 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
     return () => clearInterval(checkId);
   }, []);
 
-  const sendCommand = useCallback(async (cmd: ControlCommand): Promise<boolean> => {
-    if (commandLockRef.current) {
-      console.warn('[DeviceContext] Command rejected — another command is in progress');
-      return false;
-    }
-    commandLockRef.current = true;
-    setIsCommandPending(true);
-
-    try {
-      const result = await api.sendControlCommand(deviceId, cmd);
-      if (result.success) {
-        setLatest(prev => ({
-          ...prev,
-          controlMode: cmd.controlMode,
-          fanStatus: cmd.fanStatus,
-          damperAngle: cmd.damperAngle,
+  const logEvent = useCallback(
+    (
+      level: AlertItem['level'],
+      message: string,
+      opts?: { source?: AlertSource; actor?: string },
+    ) => {
+      setAlerts(prev => [
+        {
+          id: `evt-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          level,
+          message,
           timestamp: new Date().toISOString(),
-        }));
-        setAlerts(prev => [
-          {
-            id: `ctrl-${Date.now()}`,
-            level: 'info',
-            message: `Control command applied: Mode=${cmd.controlMode}, Fan=${cmd.fanStatus}, Damper=${cmd.damperAngle}°`,
-            timestamp: new Date().toISOString(),
-          },
-          ...prev,
-        ]);
+          source: opts?.source ?? 'system',
+          actor: opts?.actor,
+        },
+        ...prev,
+      ]);
+    },
+    [],
+  );
+
+  const sendCommand = useCallback(
+    async (cmd: ControlCommand, actor?: string): Promise<boolean> => {
+      if (commandLockRef.current) {
+        console.warn('[DeviceContext] Command rejected — another command is in progress');
+        return false;
       }
-      setError(null);
-      return result.success;
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Command failed';
-      setError(msg);
-      return false;
-    } finally {
-      commandLockRef.current = false;
-      setIsCommandPending(false);
-    }
-  }, [deviceId]);
+      commandLockRef.current = true;
+      setIsCommandPending(true);
+
+      try {
+        const result = await api.sendControlCommand(deviceId, cmd);
+        if (result.success) {
+          setLatest(prev => ({
+            ...prev,
+            controlMode: cmd.controlMode,
+            fanStatus: cmd.fanStatus,
+            damperAngle: cmd.damperAngle,
+            timestamp: new Date().toISOString(),
+          }));
+          logEvent(
+            'info',
+            `Control command applied: Mode=${cmd.controlMode}, Fan=${cmd.fanStatus}, Damper=${cmd.damperAngle}°`,
+            { source: 'user', actor },
+          );
+        }
+        setError(null);
+        return result.success;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Command failed';
+        setError(msg);
+        return false;
+      } finally {
+        commandLockRef.current = false;
+        setIsCommandPending(false);
+      }
+    },
+    [deviceId, logEvent],
+  );
 
   const clearHistory = useCallback(() => setHistory([]), []);
   const clearAlerts = useCallback(() => setAlerts([]), []);
 
-  const updateThresholds = useCallback((t: Partial<ControlThresholds>) => {
-    setThresholds(prev => {
-      const next = { ...prev, ...t };
-      setAlerts(a => [
-        {
-          id: `thr-${Date.now()}`,
-          level: 'info',
-          message: `Thresholds updated: warn=${next.warningThreshold}ppm, crit=${next.criticalThreshold}ppm, hyst=${next.hysteresis}ppm`,
-          timestamp: new Date().toISOString(),
-        },
-        ...a,
-      ]);
-      return next;
-    });
-  }, []);
+  const updateThresholds = useCallback(
+    (t: Partial<ControlThresholds>, actor?: string) => {
+      setThresholds(prev => {
+        const next = { ...prev, ...t };
+        logEvent(
+          'info',
+          `Thresholds updated: warn=${next.warningThreshold}ppm, crit=${next.criticalThreshold}ppm, hyst=${next.hysteresis}ppm`,
+          { source: 'user', actor },
+        );
+        return next;
+      });
+    },
+    [logEvent],
+  );
 
   const resumeSimulation = useCallback(() => {
     isReadyStateRef.current = false;
@@ -255,6 +310,7 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
         refresh,
         updateThresholds,
         resumeSimulation,
+        logEvent,
       }}
     >
       {children}

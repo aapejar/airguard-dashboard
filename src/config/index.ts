@@ -24,6 +24,12 @@ interface AppConfig {
   maxHistorySize: number;
   /** Default device ID when none is specified */
   defaultDeviceId: string;
+  /** Auto-logout after this many ms of inactivity */
+  sessionInactivityTimeout: number;
+  /** Maximum failed login attempts before temporary lockout */
+  maxLoginAttempts: number;
+  /** Lockout duration after exceeding max attempts (ms) */
+  loginLockoutDuration: number;
 }
 
 const defaults: Record<Environment, AppConfig> = {
@@ -37,6 +43,9 @@ const defaults: Record<Environment, AppConfig> = {
     heartbeatTimeout: 15_000,
     maxHistorySize: 500,
     defaultDeviceId: 'esp32-room-01',
+    sessionInactivityTimeout: 10 * 60 * 1000,
+    maxLoginAttempts: 3,
+    loginLockoutDuration: 60 * 1000,
   },
   production: {
     env: 'production',
@@ -48,6 +57,9 @@ const defaults: Record<Environment, AppConfig> = {
     heartbeatTimeout: 15_000,
     maxHistorySize: 1000,
     defaultDeviceId: 'esp32-room-01',
+    sessionInactivityTimeout: 10 * 60 * 1000,
+    maxLoginAttempts: 3,
+    loginLockoutDuration: 60 * 1000,
   },
 };
 

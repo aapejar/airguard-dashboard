@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Shield, Loader2, KeyRound } from 'lucide-react';
+import { Shield, Loader2, KeyRound, Lock } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import type { User } from '@/types/sensor';
 
@@ -11,11 +11,29 @@ export default function LoginPage() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [pendingUser, setPendingUser] = useState<User | null>(null);
-  const { login, verify2FA } = useAuth();
+  const [challengeId, setChallengeId] = useState<string | null>(null);
+  const [lockRemaining, setLockRemaining] = useState(0);
+
+  const { login, verify2FA, lockedUntil, failedAttempts } = useAuth();
   const navigate = useNavigate();
+
+  // Live countdown when locked out
+  useEffect(() => {
+    if (!lockedUntil) { setLockRemaining(0); return; }
+    const tick = () => {
+      const remain = Math.max(0, Math.ceil((lockedUntil - Date.now()) / 1000));
+      setLockRemaining(remain);
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [lockedUntil]);
+
+  const isLocked = lockRemaining > 0;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isLocked) return;
     setError('');
     setLoading(true);
     try {
@@ -24,11 +42,12 @@ export default function LoginPage() {
         navigate('/dashboard');
       } else if ('requires2FA' in result && result.requires2FA) {
         setPendingUser(result.pendingUser);
+        setChallengeId(result.challengeId);
       } else if ('error' in result) {
         setError(result.error);
       }
     } catch {
-      setError('Login failed');
+      setError('Authentication service unavailable. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -36,17 +55,18 @@ export default function LoginPage() {
 
   const handleVerify = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!pendingUser) return;
+    if (!pendingUser || !challengeId) return;
     setError('');
     setLoading(true);
-    const ok = await verify2FA(pendingUser, code);
+    const ok = await verify2FA(challengeId, pendingUser, code);
     setLoading(false);
     if (ok) navigate('/dashboard');
-    else setError('Invalid 2FA code. Try: 123456');
+    else setError('Verification failed. Please check your code and try again.');
   };
 
   const cancel2FA = () => {
     setPendingUser(null);
+    setChallengeId(null);
     setCode('');
     setError('');
   };
@@ -73,8 +93,10 @@ export default function LoginPage() {
                 type="text"
                 value={username}
                 onChange={e => setUsername(e.target.value)}
-                className="w-full px-3 py-2.5 bg-muted border border-border rounded-md text-sm text-foreground font-mono focus:outline-none focus:ring-1 focus:ring-primary transition-colors"
-                placeholder="admin"
+                disabled={isLocked}
+                className="w-full px-3 py-2.5 bg-muted border border-border rounded-md text-sm text-foreground font-mono focus:outline-none focus:ring-1 focus:ring-primary transition-colors disabled:opacity-50"
+                placeholder="username"
+                autoComplete="username"
                 required
               />
             </div>
@@ -84,25 +106,44 @@ export default function LoginPage() {
                 type="password"
                 value={password}
                 onChange={e => setPassword(e.target.value)}
-                className="w-full px-3 py-2.5 bg-muted border border-border rounded-md text-sm text-foreground font-mono focus:outline-none focus:ring-1 focus:ring-primary transition-colors"
+                disabled={isLocked}
+                className="w-full px-3 py-2.5 bg-muted border border-border rounded-md text-sm text-foreground font-mono focus:outline-none focus:ring-1 focus:ring-primary transition-colors disabled:opacity-50"
                 placeholder="••••••••"
+                autoComplete="current-password"
                 required
               />
             </div>
-            {error && (
+
+            {isLocked ? (
+              <div className="flex items-start gap-2 text-xs text-destructive bg-destructive/10 px-3 py-2 rounded-md">
+                <Lock className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                <span>
+                  Account temporarily locked due to too many failed attempts.
+                  Please wait <span className="font-mono font-semibold">{lockRemaining}s</span> before trying again.
+                </span>
+              </div>
+            ) : error ? (
               <p className="text-xs text-destructive bg-destructive/10 px-3 py-2 rounded-md">{error}</p>
-            )}
+            ) : null}
+
             <button
               type="submit"
-              disabled={loading}
+              disabled={loading || isLocked}
               className="w-full py-2.5 bg-primary text-primary-foreground rounded-md text-sm font-semibold hover:opacity-90 disabled:opacity-50 transition-opacity flex items-center justify-center gap-2"
             >
               {loading && <Loader2 className="h-4 w-4 animate-spin" />}
               Sign In
             </button>
-            <p className="text-[10px] text-muted-foreground text-center mt-3 leading-relaxed">
-              Default: <span className="font-mono text-foreground">admin / admin123</span> (requires 2FA)<br />
-              Also: <span className="font-mono text-foreground">operator / operator123</span> · <span className="font-mono text-foreground">viewer / user123</span>
+
+            {failedAttempts > 0 && !isLocked && (
+              <p className="text-[10px] text-warning text-center">
+                {failedAttempts} failed attempt{failedAttempts > 1 ? 's' : ''} on record.
+              </p>
+            )}
+
+            <p className="text-[10px] text-muted-foreground text-center mt-3 leading-relaxed flex items-center justify-center gap-1.5">
+              <Lock className="h-3 w-3" />
+              Authorized personnel only — contact your administrator for access.
             </p>
           </form>
         ) : (
@@ -112,11 +153,13 @@ export default function LoginPage() {
               <span className="font-semibold">Two-Factor Authentication</span>
             </div>
             <p className="text-xs text-muted-foreground">
-              Enter the 6-digit verification code for{' '}
+              Enter your 2FA verification code from your authenticator app to continue as{' '}
               <span className="font-mono text-foreground">{pendingUser.username}</span>.
             </p>
             <div>
-              <label className="block text-xs text-muted-foreground uppercase tracking-wider mb-1.5">Verification Code</label>
+              <label className="block text-xs text-muted-foreground uppercase tracking-wider mb-1.5">
+                Verification Code
+              </label>
               <input
                 type="text"
                 inputMode="numeric"
@@ -128,6 +171,7 @@ export default function LoginPage() {
                 placeholder="••••••"
                 required
                 autoFocus
+                autoComplete="one-time-code"
               />
             </div>
             {error && (
@@ -148,9 +192,6 @@ export default function LoginPage() {
             >
               ← Back to login
             </button>
-            <p className="text-[10px] text-muted-foreground text-center">
-              Demo code: <span className="font-mono text-foreground">123456</span>
-            </p>
           </form>
         )}
       </div>

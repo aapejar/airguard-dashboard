@@ -69,6 +69,8 @@ export function AlertsPanel({ alerts, onClear }: AlertsPanelProps) {
                   <p className="text-foreground text-xs leading-relaxed">{alert.message}</p>
                   <p className="text-xs text-muted-foreground font-mono mt-1">
                     {formatTimestamp(alert.timestamp)}
+                    {alert.actor && <span> · by {alert.actor}</span>}
+                    {alert.source && alert.source !== 'system' && <span> · {alert.source}</span>}
                   </p>
                 </div>
                 <span className={cn(
