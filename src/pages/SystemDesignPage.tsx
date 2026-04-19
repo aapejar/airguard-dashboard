@@ -1,4 +1,5 @@
 import { DashboardLayout } from '@/components/DashboardLayout';
+import { useDevice } from '@/context/DeviceContext';
 import { cn } from '@/lib/utils';
 import { ArrowDown, ArrowRight, Cpu, Wifi, BarChart3, Settings2, ShieldCheck, RefreshCw } from 'lucide-react';
 
@@ -7,43 +8,46 @@ const flowSteps = [
   { icon: BarChart3, title: 'Sensor Reading', desc: 'Read indoor CO₂ and outdoor CO₂ values from sensors' },
   { icon: ShieldCheck, title: 'Data Validation', desc: 'Check sensor values are within expected range (0–5000 ppm)' },
   { icon: Settings2, title: 'Data Processing', desc: 'Compare indoor CO₂ vs outdoor CO₂, determine air quality state' },
-  { icon: ArrowRight, title: 'Control Decision', desc: 'Apply on-off control logic based on thresholds (900/1000 ppm)' },
+  { icon: ArrowRight, title: 'Control Decision', desc: 'Apply on-off control logic based on configurable thresholds' },
   { icon: Wifi, title: 'Send to Server', desc: 'HTTP POST sensor data and status to web dashboard API' },
   { icon: RefreshCw, title: 'Loop', desc: 'Wait for refresh interval, then repeat the cycle' },
 ];
 
-const controlRules = [
-  {
-    condition: 'Indoor CO₂ < 900 ppm',
-    action: 'Fan OFF · Damper Closed',
-    color: 'border-success/40 bg-success/5',
-    dot: 'bg-success',
-    note: 'Air quality is acceptable',
-  },
-  {
-    condition: '900 ≤ Indoor CO₂ ≤ 1000 ppm',
-    action: 'Maintain Previous State',
-    color: 'border-warning/40 bg-warning/5',
-    dot: 'bg-warning',
-    note: 'Dead-band zone — prevents oscillation',
-  },
-  {
-    condition: 'Indoor CO₂ > 1000 ppm AND Outdoor < Indoor',
-    action: 'Fan ON · Damper Open',
-    color: 'border-destructive/40 bg-destructive/5',
-    dot: 'bg-destructive',
-    note: 'Outdoor air is cleaner — ventilate',
-  },
-  {
-    condition: 'Indoor CO₂ > 1000 ppm AND Outdoor ≥ Indoor',
-    action: 'Fan OFF · Damper Closed',
-    color: 'border-primary/40 bg-primary/5',
-    dot: 'bg-primary',
-    note: 'Outdoor air is worse — protect indoor',
-  },
-];
-
 export default function SystemDesignPage() {
+  const { thresholds } = useDevice();
+  const { warningThreshold: warn, criticalThreshold: crit, hysteresis } = thresholds;
+
+  const controlRules = [
+    {
+      condition: `Indoor CO₂ < ${warn} ppm`,
+      action: 'Fan OFF · Damper Closed',
+      color: 'border-success/40 bg-success/5',
+      dot: 'bg-success',
+      note: 'Air quality is acceptable',
+    },
+    {
+      condition: `${warn} ≤ Indoor CO₂ ≤ ${crit} ppm`,
+      action: 'Maintain Previous State',
+      color: 'border-warning/40 bg-warning/5',
+      dot: 'bg-warning',
+      note: `Dead-band zone (±${hysteresis} ppm) — prevents oscillation`,
+    },
+    {
+      condition: `Indoor CO₂ > ${crit} ppm AND Outdoor < Indoor`,
+      action: 'Fan ON · Damper Open',
+      color: 'border-destructive/40 bg-destructive/5',
+      dot: 'bg-destructive',
+      note: 'Outdoor air is cleaner — ventilate',
+    },
+    {
+      condition: `Indoor CO₂ > ${crit} ppm AND Outdoor ≥ Indoor`,
+      action: 'Fan OFF · Damper Closed',
+      color: 'border-primary/40 bg-primary/5',
+      dot: 'bg-primary',
+      note: 'Outdoor air is worse — protect indoor',
+    },
+  ];
+
   return (
     <DashboardLayout>
       <div className="mb-8">
@@ -87,15 +91,12 @@ export default function SystemDesignPage() {
           <div className="panel p-6">
             <h3 className="text-sm font-semibold text-foreground uppercase tracking-wider mb-2">On-Off Control Logic</h3>
             <p className="text-xs text-muted-foreground mb-6 leading-relaxed">
-              Hysteresis-based on-off control with dead-band to prevent relay chatter. The system compares indoor and outdoor CO₂ levels before deciding to ventilate.
+              Hysteresis-based on-off control with dead-band to prevent relay chatter. Thresholds are configurable from the Control page and update live.
             </p>
 
             <div className="space-y-3">
               {controlRules.map((rule, i) => (
-                <div
-                  key={i}
-                  className={cn('p-4 rounded-lg border transition-colors', rule.color)}
-                >
+                <div key={i} className={cn('p-4 rounded-lg border transition-colors', rule.color)}>
                   <div className="flex items-start gap-3">
                     <span className={cn('h-2.5 w-2.5 rounded-full mt-1 shrink-0', rule.dot)} />
                     <div className="flex-1">
@@ -109,18 +110,23 @@ export default function SystemDesignPage() {
             </div>
           </div>
 
-          {/* Threshold Summary */}
+          {/* Threshold Summary (live) */}
           <div className="panel p-6">
-            <h3 className="text-sm font-semibold text-foreground uppercase tracking-wider mb-4">Threshold Parameters</h3>
-            <div className="grid grid-cols-2 gap-4">
+            <h3 className="text-sm font-semibold text-foreground uppercase tracking-wider mb-4">Threshold Parameters (Live)</h3>
+            <div className="grid grid-cols-3 gap-4">
               <div className="bg-muted/30 rounded-lg p-4 text-center">
-                <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Lower Threshold</p>
-                <p className="text-2xl font-bold font-mono text-warning">900</p>
+                <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Warning</p>
+                <p className="text-2xl font-bold font-mono text-warning">{warn}</p>
                 <p className="text-xs text-muted-foreground">ppm</p>
               </div>
               <div className="bg-muted/30 rounded-lg p-4 text-center">
-                <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Upper Threshold</p>
-                <p className="text-2xl font-bold font-mono text-destructive">1000</p>
+                <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Critical</p>
+                <p className="text-2xl font-bold font-mono text-destructive">{crit}</p>
+                <p className="text-xs text-muted-foreground">ppm</p>
+              </div>
+              <div className="bg-muted/30 rounded-lg p-4 text-center">
+                <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Hysteresis</p>
+                <p className="text-2xl font-bold font-mono text-primary">{hysteresis}</p>
                 <p className="text-xs text-muted-foreground">ppm</p>
               </div>
             </div>

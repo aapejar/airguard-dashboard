@@ -3,17 +3,17 @@ import { SensorCard } from '@/components/SensorCard';
 import { CO2Chart } from '@/components/CO2Chart';
 import { AlertsPanel } from '@/components/AlertsPanel';
 import { SystemStatusPanel } from '@/components/SystemStatusPanel';
-import { Wind, Fan, Gauge, Activity, ToggleRight } from 'lucide-react';
+import { Wind, Fan, Gauge, Activity, ToggleRight, PlayCircle } from 'lucide-react';
 import { useDevice } from '@/context/DeviceContext';
 
-function getCO2Status(val: number): 'normal' | 'warning' | 'critical' {
-  if (val >= 1000) return 'critical';
-  if (val >= 600) return 'warning';
-  return 'normal';
-}
-
 export default function DashboardPage() {
-  const { latest, status, history, alerts } = useDevice();
+  const { latest, status, history, alerts, clearAlerts, thresholds, isReadyState, resumeSimulation } = useDevice();
+
+  const getCO2Status = (val: number): 'normal' | 'warning' | 'critical' => {
+    if (val >= thresholds.criticalThreshold) return 'critical';
+    if (val >= thresholds.warningThreshold) return 'warning';
+    return 'normal';
+  };
 
   return (
     <DashboardLayout>
@@ -31,7 +31,25 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* Primary: Indoor CO2 highlight + secondary cards */}
+      {isReadyState && (
+        <div className="panel p-4 mb-4 flex items-center justify-between border-primary/30">
+          <div className="flex items-center gap-3">
+            <PlayCircle className="h-5 w-5 text-primary shrink-0" />
+            <div>
+              <p className="text-sm font-semibold text-foreground">System Ready</p>
+              <p className="text-xs text-muted-foreground">Seeded simulation finished. Awaiting live data from device, or resume simulation for demo.</p>
+            </div>
+          </div>
+          <button
+            onClick={resumeSimulation}
+            className="px-3 py-1.5 text-xs font-semibold bg-primary text-primary-foreground rounded-md hover:opacity-90 transition-opacity shrink-0"
+          >
+            Resume Simulation
+          </button>
+        </div>
+      )}
+
+      {/* Primary cards */}
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-3 mb-3">
         <div className="lg:col-span-1">
           <SensorCard
@@ -76,7 +94,7 @@ export default function DashboardPage() {
         </div>
         <div className="space-y-4">
           <SystemStatusPanel status={status} />
-          <AlertsPanel alerts={alerts} />
+          <AlertsPanel alerts={alerts} onClear={clearAlerts} />
         </div>
       </div>
     </DashboardLayout>

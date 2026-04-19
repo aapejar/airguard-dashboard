@@ -40,7 +40,7 @@ export interface ControlCommand {
   damperAngle: number;
 }
 
-export type UserRole = 'admin' | 'operator' | 'viewer';
+export type UserRole = 'admin' | 'operator' | 'user';
 
 export interface User {
   id: string;

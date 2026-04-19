@@ -10,28 +10,47 @@ import DataLogsPage from "@/pages/DataLogsPage";
 import ControlPage from "@/pages/ControlPage";
 import SettingsPage from "@/pages/SettingsPage";
 import SystemDesignPage from "@/pages/SystemDesignPage";
+import UsersPage from "@/pages/UsersPage";
 import NotFound from "@/pages/NotFound";
 import type { ReactNode } from "react";
+import type { UserRole } from "@/types/sensor";
+import { Loader2 } from "lucide-react";
 
 const queryClient = new QueryClient();
 
-function ProtectedRoute({ children }: { children: ReactNode }) {
-  const { isAuthenticated } = useAuth();
+function ProtectedRoute({ children, roles }: { children: ReactNode; roles?: UserRole[] }) {
+  const { isAuthenticated, user, isLoading } = useAuth();
+  if (isLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background">
+        <Loader2 className="h-6 w-6 animate-spin text-primary" />
+      </div>
+    );
+  }
   if (!isAuthenticated) return <Navigate to="/" replace />;
+  if (roles && user && !roles.includes(user.role)) return <Navigate to="/dashboard" replace />;
   return <>{children}</>;
 }
 
 function AppRoutes() {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, isLoading } = useAuth();
+  if (isLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background">
+        <Loader2 className="h-6 w-6 animate-spin text-primary" />
+      </div>
+    );
+  }
 
   return (
     <Routes>
       <Route path="/" element={isAuthenticated ? <Navigate to="/dashboard" replace /> : <LoginPage />} />
       <Route path="/dashboard" element={<ProtectedRoute><DashboardPage /></ProtectedRoute>} />
       <Route path="/logs" element={<ProtectedRoute><DataLogsPage /></ProtectedRoute>} />
-      <Route path="/control" element={<ProtectedRoute><ControlPage /></ProtectedRoute>} />
+      <Route path="/control" element={<ProtectedRoute roles={['admin', 'operator']}><ControlPage /></ProtectedRoute>} />
       <Route path="/design" element={<ProtectedRoute><SystemDesignPage /></ProtectedRoute>} />
-      <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
+      <Route path="/settings" element={<ProtectedRoute roles={['admin']}><SettingsPage /></ProtectedRoute>} />
+      <Route path="/users" element={<ProtectedRoute roles={['admin']}><UsersPage /></ProtectedRoute>} />
       <Route path="*" element={<NotFound />} />
     </Routes>
   );
