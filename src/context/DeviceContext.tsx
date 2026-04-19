@@ -146,6 +146,7 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
               level: 'info',
               message: 'Seeded simulation completed — system ready, awaiting real device data',
               timestamp: new Date().toISOString(),
+              source: 'system',
             },
             ...a,
           ]);
@@ -175,64 +176,87 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
     return () => clearInterval(checkId);
   }, []);
 
-  const sendCommand = useCallback(async (cmd: ControlCommand): Promise<boolean> => {
-    if (commandLockRef.current) {
-      console.warn('[DeviceContext] Command rejected — another command is in progress');
-      return false;
-    }
-    commandLockRef.current = true;
-    setIsCommandPending(true);
-
-    try {
-      const result = await api.sendControlCommand(deviceId, cmd);
-      if (result.success) {
-        setLatest(prev => ({
-          ...prev,
-          controlMode: cmd.controlMode,
-          fanStatus: cmd.fanStatus,
-          damperAngle: cmd.damperAngle,
+  const logEvent = useCallback(
+    (
+      level: AlertItem['level'],
+      message: string,
+      opts?: { source?: AlertSource; actor?: string },
+    ) => {
+      setAlerts(prev => [
+        {
+          id: `evt-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          level,
+          message,
           timestamp: new Date().toISOString(),
-        }));
-        setAlerts(prev => [
-          {
-            id: `ctrl-${Date.now()}`,
-            level: 'info',
-            message: `Control command applied: Mode=${cmd.controlMode}, Fan=${cmd.fanStatus}, Damper=${cmd.damperAngle}°`,
-            timestamp: new Date().toISOString(),
-          },
-          ...prev,
-        ]);
+          source: opts?.source ?? 'system',
+          actor: opts?.actor,
+        },
+        ...prev,
+      ]);
+    },
+    [],
+  );
+
+  const sendCommand = useCallback(
+    async (cmd: ControlCommand, actor?: string): Promise<boolean> => {
+      if (commandLockRef.current) {
+        console.warn('[DeviceContext] Command rejected — another command is in progress');
+        return false;
       }
-      setError(null);
-      return result.success;
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Command failed';
-      setError(msg);
-      return false;
-    } finally {
-      commandLockRef.current = false;
-      setIsCommandPending(false);
-    }
-  }, [deviceId]);
+      commandLockRef.current = true;
+      setIsCommandPending(true);
+
+      try {
+        const result = await api.sendControlCommand(deviceId, cmd);
+        if (result.success) {
+          setLatest(prev => ({
+            ...prev,
+            controlMode: cmd.controlMode,
+            fanStatus: cmd.fanStatus,
+            damperAngle: cmd.damperAngle,
+            timestamp: new Date().toISOString(),
+          }));
+          logEvent(
+            'info',
+            `Control command applied: Mode=${cmd.controlMode}, Fan=${cmd.fanStatus}, Damper=${cmd.damperAngle}°`,
+            { source: 'user', actor },
+          );
+        }
+        setError(null);
+        return result.success;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Command failed';
+        setError(msg);
+        return false;
+      } finally {
+        commandLockRef.current = false;
+        setIsCommandPending(false);
+      }
+    },
+    [deviceId, logEvent],
+  );
 
   const clearHistory = useCallback(() => setHistory([]), []);
   const clearAlerts = useCallback(() => setAlerts([]), []);
 
-  const updateThresholds = useCallback((t: Partial<ControlThresholds>) => {
-    setThresholds(prev => {
-      const next = { ...prev, ...t };
-      setAlerts(a => [
-        {
-          id: `thr-${Date.now()}`,
-          level: 'info',
-          message: `Thresholds updated: warn=${next.warningThreshold}ppm, crit=${next.criticalThreshold}ppm, hyst=${next.hysteresis}ppm`,
-          timestamp: new Date().toISOString(),
-        },
-        ...a,
-      ]);
-      return next;
-    });
-  }, []);
+  const updateThresholds = useCallback(
+    (t: Partial<ControlThresholds>, actor?: string) => {
+      setThresholds(prev => {
+        const next = { ...prev, ...t };
+        return next;
+      });
+      // Log after state update — use the merged values via functional read
+      setThresholds(curr => {
+        logEvent(
+          'info',
+          `Thresholds updated: warn=${curr.warningThreshold}ppm, crit=${curr.criticalThreshold}ppm, hyst=${curr.hysteresis}ppm`,
+          { source: 'user', actor },
+        );
+        return curr;
+      });
+    },
+    [logEvent],
+  );
 
   const resumeSimulation = useCallback(() => {
     isReadyStateRef.current = false;
@@ -261,6 +285,7 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
         refresh,
         updateThresholds,
         resumeSimulation,
+        logEvent,
       }}
     >
       {children}
