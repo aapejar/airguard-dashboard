@@ -62,7 +62,7 @@ export function AppSidebar() {
           </div>
         )}
         <button
-          onClick={logout}
+          onClick={() => logout('manual')}
           className="flex items-center gap-3 px-3 py-2 w-full rounded-md text-sm text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
         >
           <LogOut className="h-4 w-4 shrink-0" />

@@ -114,6 +114,7 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
   const lastHeartbeatRef = useRef<number>(Date.now());
   const commandLockRef = useRef(false);
   const isReadyStateRef = useRef(false);
+  const cleanupRef = useRef<(() => void) | null>(null);
 
   // Persist thresholds
   useEffect(() => {
@@ -166,6 +167,34 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
     const pollId = setInterval(refresh, config.pollingInterval);
     return () => clearInterval(pollId);
   }, [refresh]);
+
+  // ── Subscribe to auth/audit events from outside the provider tree ─
+  useEffect(() => {
+    // Lazy import to avoid circular deps if any
+    let mounted = true;
+    import('@/services/auditBus').then(({ auditBus }) => {
+      if (!mounted) return;
+      const unsub = auditBus.subscribe(e => {
+        setAlerts(prev => [
+          {
+            id: `audit-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            level: e.level,
+            message: e.message,
+            timestamp: new Date().toISOString(),
+            source: e.source,
+            actor: e.actor,
+          },
+          ...prev,
+        ]);
+      });
+      // Store cleanup on the closure
+      cleanupRef.current = unsub;
+    });
+    return () => {
+      mounted = false;
+      cleanupRef.current?.();
+    };
+  }, []);
 
   // ── Heartbeat-based offline detection ──────────────
   useEffect(() => {
