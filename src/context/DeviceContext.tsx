@@ -6,31 +6,60 @@ import { generateHistoricalReadings, mockAlerts } from '@/data/mockData';
 
 // ── Types ────────────────────────────────────────────────
 
+export interface ControlThresholds {
+  /** Lower threshold (ppm). Below → fan OFF */
+  warningThreshold: number;
+  /** Upper threshold (ppm). Above → fan ON */
+  criticalThreshold: number;
+  /** Hysteresis dead-band (ppm) */
+  hysteresis: number;
+}
+
 interface DeviceState {
   latest: SensorReading;
   status: SystemStatus;
   history: SensorReading[];
   alerts: AlertItem[];
+  thresholds: ControlThresholds;
   isLoading: boolean;
-  /** True while a control command is in flight */
   isCommandPending: boolean;
   error: string | null;
+  /** Count of polling cycles completed since last reset */
+  cycleCount: number;
+  /** True when system has entered "ready / waiting for real data" state */
+  isReadyState: boolean;
 }
 
 interface DeviceContextType extends DeviceState {
-  /** Active device ID */
   deviceId: string;
-  /** Switch to a different device */
   setDeviceId: (id: string) => void;
-  /** Send a control command; returns true on success. Debounced — rejects while pending. */
   sendCommand: (cmd: ControlCommand) => Promise<boolean>;
-  /** Clear all historical logs */
   clearHistory: () => void;
-  /** Force-refresh latest reading from API */
+  clearAlerts: () => void;
   refresh: () => Promise<void>;
+  updateThresholds: (t: Partial<ControlThresholds>) => void;
+  /** Reset the cycle counter and re-arm seeded simulation */
+  resumeSimulation: () => void;
 }
 
 const DeviceContext = createContext<DeviceContextType | null>(null);
+
+const THRESHOLDS_KEY = 'airguard.thresholds';
+const MAX_CYCLES = 5;
+
+const defaultThresholds: ControlThresholds = {
+  warningThreshold: 900,
+  criticalThreshold: 1000,
+  hysteresis: 100,
+};
+
+function loadThresholds(): ControlThresholds {
+  try {
+    const raw = localStorage.getItem(THRESHOLDS_KEY);
+    if (raw) return { ...defaultThresholds, ...JSON.parse(raw) };
+  } catch { /* ignore */ }
+  return defaultThresholds;
+}
 
 // ── Seed data ────────────────────────────────────────────
 const seededHistory = generateHistoricalReadings(50);
@@ -55,12 +84,7 @@ const initialStatus: SystemStatus = {
   wifiSignal: -42,
 };
 
-// ── Deduplication helper ─────────────────────────────────
-function appendUnique(
-  existing: SensorReading[],
-  incoming: SensorReading,
-  maxSize: number,
-): SensorReading[] {
+function appendUnique(existing: SensorReading[], incoming: SensorReading, maxSize: number): SensorReading[] {
   if (existing.some(r => r.id === incoming.id)) return existing;
   const next = [...existing, incoming];
   return next.length > maxSize ? next.slice(next.length - maxSize) : next;
@@ -74,15 +98,25 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<SystemStatus>(initialStatus);
   const [history, setHistory] = useState<SensorReading[]>(seededHistory);
   const [alerts, setAlerts] = useState<AlertItem[]>([...mockAlerts]);
+  const [thresholds, setThresholds] = useState<ControlThresholds>(loadThresholds);
   const [isLoading, setIsLoading] = useState(false);
   const [isCommandPending, setIsCommandPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [cycleCount, setCycleCount] = useState(0);
+  const [isReadyState, setIsReadyState] = useState(false);
 
   const lastHeartbeatRef = useRef<number>(Date.now());
   const commandLockRef = useRef(false);
+  const isReadyStateRef = useRef(false);
+
+  // Persist thresholds
+  useEffect(() => {
+    localStorage.setItem(THRESHOLDS_KEY, JSON.stringify(thresholds));
+  }, [thresholds]);
 
   // ── Fetch latest reading ───────────────────────────
   const refresh = useCallback(async () => {
+    if (isReadyStateRef.current) return; // paused — waiting for real data
     try {
       const [reading, sysStatus] = await Promise.all([
         api.getLatestReading(deviceId),
@@ -93,8 +127,25 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
       setStatus(sysStatus);
       setError(null);
       lastHeartbeatRef.current = Date.now();
-
       setHistory(prev => appendUnique(prev, reading, config.maxHistorySize));
+
+      setCycleCount(prev => {
+        const next = prev + 1;
+        if (next >= MAX_CYCLES) {
+          isReadyStateRef.current = true;
+          setIsReadyState(true);
+          setAlerts(a => [
+            {
+              id: `sys-${Date.now()}`,
+              level: 'info',
+              message: 'Seeded simulation completed — system ready, awaiting real device data',
+              timestamp: new Date().toISOString(),
+            },
+            ...a,
+          ]);
+        }
+        return next;
+      });
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Failed to fetch data';
       setError(msg);
@@ -102,11 +153,9 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
     }
   }, [deviceId]);
 
-  // ── Polling loop ───────────────────────────────────
   useEffect(() => {
     setIsLoading(true);
     refresh().finally(() => setIsLoading(false));
-
     const pollId = setInterval(refresh, config.pollingInterval);
     return () => clearInterval(pollId);
   }, [refresh]);
@@ -115,30 +164,22 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const checkId = setInterval(() => {
       const elapsed = Date.now() - lastHeartbeatRef.current;
-      setStatus(prev => ({
-        ...prev,
-        deviceOnline: elapsed < config.heartbeatTimeout,
-      }));
+      setStatus(prev => ({ ...prev, deviceOnline: elapsed < config.heartbeatTimeout }));
     }, 3000);
     return () => clearInterval(checkId);
   }, []);
 
-  // ── Send control command (with lock) ───────────────
   const sendCommand = useCallback(async (cmd: ControlCommand): Promise<boolean> => {
-    // Prevent duplicate rapid commands
     if (commandLockRef.current) {
       console.warn('[DeviceContext] Command rejected — another command is in progress');
       return false;
     }
-
     commandLockRef.current = true;
     setIsCommandPending(true);
 
     try {
       const result = await api.sendControlCommand(deviceId, cmd);
-
       if (result.success) {
-        // Update state from confirmed command (server-confirmed, not optimistic)
         setLatest(prev => ({
           ...prev,
           controlMode: cmd.controlMode,
@@ -146,16 +187,16 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
           damperAngle: cmd.damperAngle,
           timestamp: new Date().toISOString(),
         }));
-
-        const newAlert: AlertItem = {
-          id: `ctrl-${Date.now()}`,
-          level: 'info',
-          message: `Control command applied: Mode=${cmd.controlMode}, Fan=${cmd.fanStatus}, Damper=${cmd.damperAngle}°`,
-          timestamp: new Date().toISOString(),
-        };
-        setAlerts(prev => [newAlert, ...prev]);
+        setAlerts(prev => [
+          {
+            id: `ctrl-${Date.now()}`,
+            level: 'info',
+            message: `Control command applied: Mode=${cmd.controlMode}, Fan=${cmd.fanStatus}, Damper=${cmd.damperAngle}°`,
+            timestamp: new Date().toISOString(),
+          },
+          ...prev,
+        ]);
       }
-
       setError(null);
       return result.success;
     } catch (err) {
@@ -168,9 +209,29 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
     }
   }, [deviceId]);
 
-  // ── Clear history ──────────────────────────────────
-  const clearHistory = useCallback(() => {
-    setHistory([]);
+  const clearHistory = useCallback(() => setHistory([]), []);
+  const clearAlerts = useCallback(() => setAlerts([]), []);
+
+  const updateThresholds = useCallback((t: Partial<ControlThresholds>) => {
+    setThresholds(prev => {
+      const next = { ...prev, ...t };
+      setAlerts(a => [
+        {
+          id: `thr-${Date.now()}`,
+          level: 'info',
+          message: `Thresholds updated: warn=${next.warningThreshold}ppm, crit=${next.criticalThreshold}ppm, hyst=${next.hysteresis}ppm`,
+          timestamp: new Date().toISOString(),
+        },
+        ...a,
+      ]);
+      return next;
+    });
+  }, []);
+
+  const resumeSimulation = useCallback(() => {
+    isReadyStateRef.current = false;
+    setIsReadyState(false);
+    setCycleCount(0);
   }, []);
 
   return (
@@ -182,12 +243,18 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
         status,
         history,
         alerts,
+        thresholds,
         isLoading,
         isCommandPending,
         error,
+        cycleCount,
+        isReadyState,
         sendCommand,
         clearHistory,
+        clearAlerts,
         refresh,
+        updateThresholds,
+        resumeSimulation,
       }}
     >
       {children}

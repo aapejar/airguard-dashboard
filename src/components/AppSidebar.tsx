@@ -1,20 +1,31 @@
 import { useState } from 'react';
-import { LayoutDashboard, ScrollText, Sliders, Settings, LogOut, ChevronLeft, ChevronRight, Shield, FileCode2 } from 'lucide-react';
+import { LayoutDashboard, ScrollText, Sliders, Settings, LogOut, ChevronLeft, ChevronRight, Shield, FileCode2, Users } from 'lucide-react';
 import { SidebarNavItem } from './SidebarNavItem';
 import { useAuth } from '@/context/AuthContext';
+import type { UserRole } from '@/types/sensor';
 import { cn } from '@/lib/utils';
+
+interface NavDef {
+  to: string;
+  icon: typeof LayoutDashboard;
+  label: string;
+  roles: UserRole[];
+}
+
+const allNav: NavDef[] = [
+  { to: '/dashboard', icon: LayoutDashboard, label: 'Dashboard', roles: ['admin', 'operator', 'user'] },
+  { to: '/logs', icon: ScrollText, label: 'Data Logs', roles: ['admin', 'operator', 'user'] },
+  { to: '/control', icon: Sliders, label: 'Control', roles: ['admin', 'operator'] },
+  { to: '/design', icon: FileCode2, label: 'System Design', roles: ['admin', 'operator', 'user'] },
+  { to: '/settings', icon: Settings, label: 'Settings', roles: ['admin'] },
+  { to: '/users', icon: Users, label: 'Users', roles: ['admin'] },
+];
 
 export function AppSidebar() {
   const [collapsed, setCollapsed] = useState(false);
   const { user, logout } = useAuth();
 
-  const navItems = [
-    { to: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
-    { to: '/logs', icon: ScrollText, label: 'Data Logs' },
-    { to: '/control', icon: Sliders, label: 'Control' },
-    { to: '/design', icon: FileCode2, label: 'System Design' },
-    { to: '/settings', icon: Settings, label: 'Settings' },
-  ];
+  const navItems = allNav.filter(item => user && item.roles.includes(user.role));
 
   return (
     <aside
@@ -37,7 +48,7 @@ export function AppSidebar() {
       {/* Nav */}
       <nav className="flex-1 px-2 py-4 space-y-1">
         {navItems.map(item => (
-          <SidebarNavItem key={item.to} {...item} collapsed={collapsed} />
+          <SidebarNavItem key={item.to} to={item.to} icon={item.icon} label={item.label} collapsed={collapsed} />
         ))}
       </nav>
 

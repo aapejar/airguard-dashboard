@@ -3,7 +3,7 @@ import { DashboardLayout } from '@/components/DashboardLayout';
 import { useDevice } from '@/context/DeviceContext';
 import { useAuth } from '@/context/AuthContext';
 import { cn } from '@/lib/utils';
-import { AlertTriangle, CheckCircle, Loader2, ShieldCheck } from 'lucide-react';
+import { AlertTriangle, CheckCircle, Loader2, ShieldCheck, SlidersHorizontal } from 'lucide-react';
 import { Switch } from '@/components/ui/switch';
 import { Slider } from '@/components/ui/slider';
 import {
@@ -18,9 +18,10 @@ import {
 } from '@/components/ui/alert-dialog';
 
 export default function ControlPage() {
-  const { user } = useAuth();
-  const { latest, sendCommand, isCommandPending } = useDevice();
-  const canControl = user?.role === 'admin' || user?.role === 'operator';
+  const { hasRole } = useAuth();
+  const { latest, sendCommand, isCommandPending, thresholds, updateThresholds } = useDevice();
+  const canControl = hasRole('admin', 'operator');
+  const canConfigureThresholds = hasRole('admin', 'operator');
 
   const [mode, setMode] = useState<'AUTO' | 'MANUAL'>(latest.controlMode);
   const [fanOn, setFanOn] = useState(latest.fanStatus === 'ON');
@@ -29,20 +30,34 @@ export default function ControlPage() {
   const [applied, setApplied] = useState(false);
   const [cmdError, setCmdError] = useState<string | null>(null);
 
+  // Threshold form state
+  const [warn, setWarn] = useState(thresholds.warningThreshold);
+  const [crit, setCrit] = useState(thresholds.criticalThreshold);
+  const [hyst, setHyst] = useState(thresholds.hysteresis);
+  const [thrSaved, setThrSaved] = useState(false);
+  const [thrError, setThrError] = useState<string | null>(null);
+
   const handleApply = async () => {
     setShowConfirm(false);
     setCmdError(null);
-    const ok = await sendCommand({
-      controlMode: mode,
-      fanStatus: fanOn ? 'ON' : 'OFF',
-      damperAngle,
-    });
+    const ok = await sendCommand({ controlMode: mode, fanStatus: fanOn ? 'ON' : 'OFF', damperAngle });
     if (ok) {
       setApplied(true);
       setTimeout(() => setApplied(false), 3000);
     } else {
-      setCmdError(isCommandPending ? 'Another command is already in progress.' : 'Failed to apply command. Please try again.');
+      setCmdError(isCommandPending ? 'Another command is already in progress.' : 'Failed to apply command.');
     }
+  };
+
+  const handleSaveThresholds = () => {
+    setThrError(null);
+    if (warn < 200 || warn > 5000) return setThrError('Warning must be between 200 and 5000 ppm');
+    if (crit < 400 || crit > 5000) return setThrError('Critical must be between 400 and 5000 ppm');
+    if (warn >= crit) return setThrError('Warning must be less than critical');
+    if (hyst < 0 || hyst > 500) return setThrError('Hysteresis must be 0–500 ppm');
+    updateThresholds({ warningThreshold: warn, criticalThreshold: crit, hysteresis: hyst });
+    setThrSaved(true);
+    setTimeout(() => setThrSaved(false), 3000);
   };
 
   const isBusy = isCommandPending;
@@ -86,6 +101,70 @@ export default function ControlPage() {
           </div>
         </div>
 
+        {/* CO₂ Threshold Configuration */}
+        <div className="panel p-5 space-y-4">
+          <div className="flex items-center gap-2 mb-1">
+            <SlidersHorizontal className="h-4 w-4 text-primary" />
+            <h3 className="text-xs text-muted-foreground uppercase tracking-wider font-semibold">CO₂ Control Thresholds</h3>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Defines hysteresis-based on/off control logic. Updated values apply immediately and are reflected on the System Design page.
+          </p>
+
+          <div className="grid grid-cols-3 gap-3">
+            <div>
+              <label className="block text-xs text-muted-foreground mb-1.5">Warning (ppm)</label>
+              <input
+                type="number"
+                value={warn}
+                onChange={e => setWarn(Number(e.target.value))}
+                disabled={!canConfigureThresholds}
+                className="w-full px-3 py-2.5 bg-muted border border-border rounded-md text-sm text-foreground font-mono focus:outline-none focus:ring-1 focus:ring-primary transition-colors disabled:opacity-50"
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-muted-foreground mb-1.5">Critical (ppm)</label>
+              <input
+                type="number"
+                value={crit}
+                onChange={e => setCrit(Number(e.target.value))}
+                disabled={!canConfigureThresholds}
+                className="w-full px-3 py-2.5 bg-muted border border-border rounded-md text-sm text-foreground font-mono focus:outline-none focus:ring-1 focus:ring-primary transition-colors disabled:opacity-50"
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-muted-foreground mb-1.5">Hysteresis (ppm)</label>
+              <input
+                type="number"
+                value={hyst}
+                onChange={e => setHyst(Number(e.target.value))}
+                disabled={!canConfigureThresholds}
+                className="w-full px-3 py-2.5 bg-muted border border-border rounded-md text-sm text-foreground font-mono focus:outline-none focus:ring-1 focus:ring-primary transition-colors disabled:opacity-50"
+              />
+            </div>
+          </div>
+
+          {thrError && (
+            <p className="text-xs text-destructive flex items-center gap-1">
+              <AlertTriangle className="h-3 w-3" />{thrError}
+            </p>
+          )}
+
+          <button
+            onClick={handleSaveThresholds}
+            disabled={!canConfigureThresholds}
+            className="w-full py-2.5 bg-primary text-primary-foreground rounded-md text-sm font-semibold hover:opacity-90 disabled:opacity-50 transition-opacity"
+          >
+            Save Thresholds
+          </button>
+          {thrSaved && (
+            <div className="flex items-center gap-2 text-sm text-success">
+              <CheckCircle className="h-4 w-4" />
+              Thresholds saved
+            </div>
+          )}
+        </div>
+
         {/* Mode Toggle */}
         <div className="panel p-5">
           <label className="block text-xs text-muted-foreground uppercase tracking-wider mb-3">Control Mode</label>
@@ -115,7 +194,6 @@ export default function ControlPage() {
         {/* Manual Controls */}
         {mode === 'MANUAL' && (
           <div className="panel p-5 space-y-6">
-            {/* Fan ON/OFF */}
             <div>
               <label className="block text-xs text-muted-foreground uppercase tracking-wider mb-3">Fan Control</label>
               <div className="flex items-center justify-between bg-muted rounded-md px-4 py-3">
@@ -131,7 +209,6 @@ export default function ControlPage() {
               </div>
             </div>
 
-            {/* Damper Angle Slider */}
             <div>
               <div className="flex items-center justify-between mb-3">
                 <label className="text-xs text-muted-foreground uppercase tracking-wider">Damper Angle</label>
@@ -178,7 +255,6 @@ export default function ControlPage() {
         )}
       </div>
 
-      {/* Confirmation Dialog */}
       <AlertDialog open={showConfirm} onOpenChange={setShowConfirm}>
         <AlertDialogContent className="bg-card border-border">
           <AlertDialogHeader>
