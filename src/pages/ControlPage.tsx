@@ -3,7 +3,7 @@ import { DashboardLayout } from '@/components/DashboardLayout';
 import { useDevice } from '@/context/DeviceContext';
 import { useAuth } from '@/context/AuthContext';
 import { cn } from '@/lib/utils';
-import { AlertTriangle, CheckCircle, Loader2, ShieldCheck, SlidersHorizontal } from 'lucide-react';
+import { AlertTriangle, CheckCircle, Loader2, ShieldCheck, SlidersHorizontal, History, RotateCcw } from 'lucide-react';
 import { Switch } from '@/components/ui/switch';
 import { Slider } from '@/components/ui/slider';
 import {
@@ -19,7 +19,7 @@ import {
 
 export default function ControlPage() {
   const { hasRole, user } = useAuth();
-  const { latest, sendCommand, isCommandPending, thresholds, updateThresholds } = useDevice();
+  const { latest, sendCommand, isCommandPending, thresholds, updateThresholds, resetThresholds, commandHistory } = useDevice();
   const canControl = hasRole('admin', 'operator');
   const canConfigureThresholds = hasRole('admin', 'operator');
 
@@ -156,6 +156,20 @@ export default function ControlPage() {
             className="w-full py-2.5 bg-primary text-primary-foreground rounded-md text-sm font-semibold hover:opacity-90 disabled:opacity-50 transition-opacity"
           >
             Save Thresholds
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              resetThresholds(user?.username);
+              setWarn(900); setCrit(1000); setHyst(100);
+              setThrSaved(true);
+              setTimeout(() => setThrSaved(false), 3000);
+            }}
+            disabled={!canConfigureThresholds}
+            className="w-full py-2 text-xs text-muted-foreground hover:text-foreground transition-colors flex items-center justify-center gap-1.5 disabled:opacity-40"
+          >
+            <RotateCcw className="h-3 w-3" />
+            Restore default thresholds
           </button>
           {thrSaved && (
             <div className="flex items-center gap-2 text-sm text-success">
