@@ -37,6 +37,9 @@ interface AuthContextType {
   createUser: (username: string, password: string, role: UserRole) => { ok: boolean; error?: string };
   deleteUser: (id: string) => void;
   updateUserRole: (id: string, role: UserRole) => void;
+  setUserStatus: (id: string, status: 'active' | 'disabled') => void;
+  setUser2FA: (id: string, enabled: boolean) => void;
+  resetUserPassword: (id: string, newPassword: string) => { ok: boolean; error?: string };
   hasRole: (...roles: UserRole[]) => boolean;
 }
 
@@ -256,6 +259,48 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [user, users]);
 
+  const setUserStatus = useCallback((id: string, status: 'active' | 'disabled') => {
+    authService.setUserStatus(id, status);
+    setUsers(authService.listUsers());
+    const target = users.find(u => u.id === id);
+    if (target) {
+      auditBus.emit({
+        level: status === 'disabled' ? 'warning' : 'info',
+        message: `User "${target.username}" ${status === 'disabled' ? 'disabled' : 'enabled'}`,
+        source: 'auth',
+        actor: user?.username,
+      });
+    }
+  }, [user, users]);
+
+  const setUser2FA = useCallback((id: string, enabled: boolean) => {
+    authService.setUser2FA(id, enabled);
+    setUsers(authService.listUsers());
+    const target = users.find(u => u.id === id);
+    if (target) {
+      auditBus.emit({
+        level: 'info',
+        message: `2FA ${enabled ? 'enabled' : 'disabled'} for "${target.username}"`,
+        source: 'auth',
+        actor: user?.username,
+      });
+    }
+  }, [user, users]);
+
+  const resetUserPassword = useCallback((id: string, newPassword: string) => {
+    const res = authService.resetPassword(id, newPassword);
+    const target = users.find(u => u.id === id);
+    if (res.ok && target) {
+      auditBus.emit({
+        level: 'warning',
+        message: `Password reset for "${target.username}"`,
+        source: 'auth',
+        actor: user?.username,
+      });
+    }
+    return res;
+  }, [user, users]);
+
   const hasRole = useCallback(
     (...roles: UserRole[]) => !!user && roles.includes(user.role),
     [user],
@@ -276,6 +321,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         createUser,
         deleteUser,
         updateUserRole,
+        setUserStatus,
+        setUser2FA,
+        resetUserPassword,
         hasRole,
       }}
     >

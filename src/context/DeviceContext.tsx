@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useCallback, useEffect, useRef, type ReactNode } from 'react';
-import type { SensorReading, SystemStatus, ControlCommand, AlertItem, AlertSource } from '@/types/sensor';
+import type { SensorReading, SystemStatus, ControlCommand, AlertItem, AlertSource, CommandRecord, EvaluationSnapshot } from '@/types/sensor';
 import { config } from '@/config';
 import { api } from '@/services/api';
 import { generateHistoricalReadings, mockAlerts } from '@/data/mockData';
@@ -19,7 +19,12 @@ interface DeviceState {
   latest: SensorReading;
   status: SystemStatus;
   history: SensorReading[];
+  /** Real device/system alerts only (threshold breaches, disconnects, faults) */
   alerts: AlertItem[];
+  /** Activity / audit trail (auth, user actions, settings, control commands) */
+  auditLog: AlertItem[];
+  /** Last N control commands sent, with result */
+  commandHistory: CommandRecord[];
   thresholds: ControlThresholds;
   isLoading: boolean;
   isCommandPending: boolean;
@@ -36,8 +41,10 @@ interface DeviceContextType extends DeviceState {
   sendCommand: (cmd: ControlCommand, actor?: string) => Promise<boolean>;
   clearHistory: () => void;
   clearAlerts: () => void;
+  clearAuditLog: () => void;
   refresh: () => Promise<void>;
   updateThresholds: (t: Partial<ControlThresholds>, actor?: string) => void;
+  resetThresholds: (actor?: string) => void;
   /** Reset the cycle counter and re-arm seeded simulation */
   resumeSimulation: () => void;
   /** Append a structured event to the audit log */
@@ -46,18 +53,25 @@ interface DeviceContextType extends DeviceState {
     message: string,
     opts?: { source?: AlertSource; actor?: string },
   ) => void;
+  /** Compute current control logic evaluation snapshot from latest reading */
+  getEvaluation: () => EvaluationSnapshot;
+  /** Age (ms) since last successful heartbeat */
+  heartbeatAge: number;
 }
 
 const DeviceContext = createContext<DeviceContextType | null>(null);
 
 const THRESHOLDS_KEY = 'airguard.thresholds';
 const MAX_CYCLES = 5;
+const MAX_COMMAND_HISTORY = 25;
 
-const defaultThresholds: ControlThresholds = {
+export const DEFAULT_THRESHOLDS: ControlThresholds = {
   warningThreshold: 900,
   criticalThreshold: 1000,
   hysteresis: 100,
 };
+
+const defaultThresholds = DEFAULT_THRESHOLDS;
 
 function loadThresholds(): ControlThresholds {
   try {
@@ -103,13 +117,18 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
   const [latest, setLatest] = useState<SensorReading>(initialReading);
   const [status, setStatus] = useState<SystemStatus>(initialStatus);
   const [history, setHistory] = useState<SensorReading[]>(seededHistory);
-  const [alerts, setAlerts] = useState<AlertItem[]>([...mockAlerts]);
+  const [alerts, setAlerts] = useState<AlertItem[]>(
+    mockAlerts.map(a => ({ ...a, source: a.source ?? 'system' })),
+  );
+  const [auditLog, setAuditLog] = useState<AlertItem[]>([]);
+  const [commandHistory, setCommandHistory] = useState<CommandRecord[]>([]);
   const [thresholds, setThresholds] = useState<ControlThresholds>(loadThresholds);
   const [isLoading, setIsLoading] = useState(false);
   const [isCommandPending, setIsCommandPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [cycleCount, setCycleCount] = useState(0);
   const [isReadyState, setIsReadyState] = useState(false);
+  const [heartbeatAge, setHeartbeatAge] = useState(0);
 
   const lastHeartbeatRef = useRef<number>(Date.now());
   const commandLockRef = useRef(false);
@@ -175,17 +194,16 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
     import('@/services/auditBus').then(({ auditBus }) => {
       if (!mounted) return;
       const unsub = auditBus.subscribe(e => {
-        setAlerts(prev => [
-          {
-            id: `audit-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-            level: e.level,
-            message: e.message,
-            timestamp: new Date().toISOString(),
-            source: e.source,
-            actor: e.actor,
-          },
-          ...prev,
-        ]);
+        // Auth and other non-system events feed the audit log only.
+        const entry: AlertItem = {
+          id: `audit-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          level: e.level,
+          message: e.message,
+          timestamp: new Date().toISOString(),
+          source: e.source,
+          actor: e.actor,
+        };
+        setAuditLog(prev => [entry, ...prev].slice(0, 500));
       });
       // Store cleanup on the closure
       cleanupRef.current = unsub;
@@ -196,12 +214,36 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  // ── Heartbeat-based offline detection ──────────────
+  // ── Heartbeat-based offline detection + age tracking ───
   useEffect(() => {
+    let wasOnline = true;
     const checkId = setInterval(() => {
       const elapsed = Date.now() - lastHeartbeatRef.current;
-      setStatus(prev => ({ ...prev, deviceOnline: elapsed < config.heartbeatTimeout }));
-    }, 3000);
+      setHeartbeatAge(elapsed);
+      const online = elapsed < config.heartbeatTimeout;
+      setStatus(prev => {
+        if (prev.deviceOnline === online) return prev;
+        if (wasOnline && !online) {
+          setAlerts(a => [{
+            id: `sys-off-${Date.now()}`,
+            level: 'critical',
+            message: `Device went offline — no heartbeat for ${Math.round(elapsed / 1000)}s`,
+            timestamp: new Date().toISOString(),
+            source: 'system',
+          }, ...a]);
+        } else if (!wasOnline && online) {
+          setAlerts(a => [{
+            id: `sys-on-${Date.now()}`,
+            level: 'info',
+            message: 'Device reconnected — heartbeat restored',
+            timestamp: new Date().toISOString(),
+            source: 'system',
+          }, ...a]);
+        }
+        wasOnline = online;
+        return { ...prev, deviceOnline: online };
+      });
+    }, 2000);
     return () => clearInterval(checkId);
   }, []);
 
@@ -211,17 +253,20 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
       message: string,
       opts?: { source?: AlertSource; actor?: string },
     ) => {
-      setAlerts(prev => [
-        {
-          id: `evt-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-          level,
-          message,
-          timestamp: new Date().toISOString(),
-          source: opts?.source ?? 'system',
-          actor: opts?.actor,
-        },
-        ...prev,
-      ]);
+      const entry: AlertItem = {
+        id: `evt-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        level,
+        message,
+        timestamp: new Date().toISOString(),
+        source: opts?.source ?? 'system',
+        actor: opts?.actor,
+      };
+      // Route: system/device → real alerts panel; user/auth → audit log
+      if (entry.source === 'system' || entry.source === 'device') {
+        setAlerts(prev => [entry, ...prev]);
+      } else {
+        setAuditLog(prev => [entry, ...prev].slice(0, 500));
+      }
     },
     [],
   );
@@ -234,6 +279,15 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
       }
       commandLockRef.current = true;
       setIsCommandPending(true);
+      const recordId = `cmd-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      const pendingRecord: CommandRecord = {
+        id: recordId,
+        timestamp: new Date().toISOString(),
+        actor,
+        command: cmd,
+        result: 'pending',
+      };
+      setCommandHistory(prev => [pendingRecord, ...prev].slice(0, MAX_COMMAND_HISTORY));
 
       try {
         const result = await api.sendControlCommand(deviceId, cmd);
@@ -250,12 +304,16 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
             `Control command applied: Mode=${cmd.controlMode}, Fan=${cmd.fanStatus}, Damper=${cmd.damperAngle}°`,
             { source: 'user', actor },
           );
+          setCommandHistory(prev => prev.map(r => r.id === recordId ? { ...r, result: 'success' } : r));
+        } else {
+          setCommandHistory(prev => prev.map(r => r.id === recordId ? { ...r, result: 'failed', error: 'Device rejected command' } : r));
         }
         setError(null);
         return result.success;
       } catch (err) {
         const msg = err instanceof Error ? err.message : 'Command failed';
         setError(msg);
+        setCommandHistory(prev => prev.map(r => r.id === recordId ? { ...r, result: 'failed', error: msg } : r));
         return false;
       } finally {
         commandLockRef.current = false;
@@ -267,6 +325,56 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
 
   const clearHistory = useCallback(() => setHistory([]), []);
   const clearAlerts = useCallback(() => setAlerts([]), []);
+  const clearAuditLog = useCallback(() => setAuditLog([]), []);
+
+  const resetThresholds = useCallback((actor?: string) => {
+    setThresholds(DEFAULT_THRESHOLDS);
+    logEvent(
+      'info',
+      `Thresholds reset to defaults (warn=${DEFAULT_THRESHOLDS.warningThreshold}, crit=${DEFAULT_THRESHOLDS.criticalThreshold}, hyst=${DEFAULT_THRESHOLDS.hysteresis})`,
+      { source: 'user', actor },
+    );
+  }, [logEvent]);
+
+  const getEvaluation = useCallback((): EvaluationSnapshot => {
+    const indoor = latest.indoorCO2;
+    const outdoor = latest.outdoorCO2;
+    const { warningThreshold: warn, criticalThreshold: crit } = thresholds;
+    if (indoor < warn) {
+      return {
+        rule: 'below-warning',
+        ruleLabel: `Indoor CO₂ < ${warn} ppm`,
+        decision: 'Air quality acceptable — no ventilation needed',
+        recommendation: { fanStatus: 'OFF', damperAction: 'CLOSE' },
+        notes: 'System idle. Fan off, damper closed.',
+      };
+    }
+    if (indoor <= crit) {
+      return {
+        rule: 'dead-band',
+        ruleLabel: `${warn} ≤ Indoor CO₂ ≤ ${crit} ppm`,
+        decision: 'Inside hysteresis dead-band — hold previous state',
+        recommendation: { fanStatus: latest.fanStatus, damperAction: 'HOLD' },
+        notes: `Dead-band ±${thresholds.hysteresis} ppm prevents oscillation.`,
+      };
+    }
+    if (outdoor < indoor) {
+      return {
+        rule: 'above-critical-outdoor-cleaner',
+        ruleLabel: `Indoor > ${crit} ppm AND Outdoor < Indoor`,
+        decision: 'Ventilate — outdoor air is cleaner',
+        recommendation: { fanStatus: 'ON', damperAction: 'OPEN' },
+        notes: 'Pull cleaner outdoor air to reduce indoor CO₂.',
+      };
+    }
+    return {
+      rule: 'above-critical-outdoor-worse',
+      ruleLabel: `Indoor > ${crit} ppm AND Outdoor ≥ Indoor`,
+      decision: 'Keep sealed — outdoor air is worse',
+      recommendation: { fanStatus: 'OFF', damperAction: 'CLOSE' },
+      notes: 'Protect indoor environment until outdoor improves.',
+    };
+  }, [latest, thresholds]);
 
   const updateThresholds = useCallback(
     (t: Partial<ControlThresholds>, actor?: string) => {
@@ -298,19 +406,25 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
         status,
         history,
         alerts,
+        auditLog,
+        commandHistory,
         thresholds,
         isLoading,
         isCommandPending,
         error,
         cycleCount,
         isReadyState,
+        heartbeatAge,
         sendCommand,
         clearHistory,
         clearAlerts,
+        clearAuditLog,
         refresh,
         updateThresholds,
+        resetThresholds,
         resumeSimulation,
         logEvent,
+        getEvaluation,
       }}
     >
       {children}

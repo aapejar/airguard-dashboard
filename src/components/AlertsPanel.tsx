@@ -36,7 +36,7 @@ export function AlertsPanel({ alerts, onClear }: AlertsPanelProps) {
   return (
     <div className="panel p-4">
       <div className="flex items-center justify-between mb-4">
-        <h3 className="text-sm font-semibold text-foreground uppercase tracking-wider">Recent Alerts</h3>
+        <h3 className="text-sm font-semibold text-foreground uppercase tracking-wider">System Alerts</h3>
         <div className="flex items-center gap-2">
           <span className="text-xs text-muted-foreground font-mono">{alerts.length} events</span>
           {onClear && alerts.length > 0 && (
@@ -51,7 +51,7 @@ export function AlertsPanel({ alerts, onClear }: AlertsPanelProps) {
         </div>
       </div>
       {alerts.length === 0 ? (
-        <p className="text-xs text-muted-foreground text-center py-6">No recent alerts</p>
+        <p className="text-xs text-muted-foreground text-center py-6">No system alerts — all clear.</p>
       ) : (
         <div className="space-y-2">
           {alerts.map(alert => {

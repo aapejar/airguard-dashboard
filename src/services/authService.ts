@@ -16,12 +16,16 @@ import type { User, UserRole } from '@/types/sensor';
 // ── Internal credential store (dev only — replace with backend) ──────────
 interface InternalUser extends User {
   password: string;
+  status: 'active' | 'disabled';
+  lastLogin: string | null;
+  twoFactorEnabled: boolean;
+  createdAt: string;
 }
 
 const DEV_USERS: InternalUser[] = [
-  { id: '1', username: 'admin', role: 'admin', password: 'admin123' },
-  { id: '2', username: 'operator', role: 'operator', password: 'operator123' },
-  { id: '3', username: 'viewer', role: 'user', password: 'user123' },
+  { id: '1', username: 'admin', role: 'admin', password: 'admin123', status: 'active', twoFactorEnabled: true,  lastLogin: null, createdAt: '2025-01-01T00:00:00Z' },
+  { id: '2', username: 'operator', role: 'operator', password: 'operator123', status: 'active', twoFactorEnabled: false, lastLogin: null, createdAt: '2025-01-05T00:00:00Z' },
+  { id: '3', username: 'user', role: 'user', password: 'user123', status: 'active', twoFactorEnabled: false, lastLogin: null, createdAt: '2025-01-10T00:00:00Z' },
 ];
 
 /** Demo TOTP code. In production, validated server-side against a real TOTP secret. */
@@ -39,7 +43,15 @@ export type Verify2FAResponse =
 
 // ── Helpers ─────────────────────────────────────────────────────────────
 const delay = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
-const toPublicUser = (u: InternalUser): User => ({ id: u.id, username: u.username, role: u.role });
+const toPublicUser = (u: InternalUser): User => ({
+  id: u.id,
+  username: u.username,
+  role: u.role,
+  status: u.status,
+  lastLogin: u.lastLogin,
+  twoFactorEnabled: u.twoFactorEnabled,
+  createdAt: u.createdAt,
+});
 
 // ── Service ─────────────────────────────────────────────────────────────
 export const authService = {
@@ -51,9 +63,11 @@ export const authService = {
     await delay(400);
     const found = DEV_USERS.find(u => u.username === username && u.password === password);
     if (!found) return { status: 'invalid_credentials' };
+    if (found.status === 'disabled') return { status: 'invalid_credentials' };
+    found.lastLogin = new Date().toISOString();
 
     const publicUser = toPublicUser(found);
-    if (found.role === 'admin') {
+    if (found.role === 'admin' && found.twoFactorEnabled) {
       return {
         status: 'requires_2fa',
         pendingUser: publicUser,
@@ -88,7 +102,16 @@ export const authService = {
   createUser(username: string, password: string, role: UserRole): { ok: boolean; error?: string; user?: User } {
     if (!username.trim() || !password.trim()) return { ok: false, error: 'Username and password required' };
     if (DEV_USERS.some(u => u.username === username)) return { ok: false, error: 'Username already exists' };
-    const newUser: InternalUser = { id: `u-${Date.now()}`, username: username.trim(), password, role };
+    const newUser: InternalUser = {
+      id: `u-${Date.now()}`,
+      username: username.trim(),
+      password,
+      role,
+      status: 'active',
+      twoFactorEnabled: role === 'admin',
+      lastLogin: null,
+      createdAt: new Date().toISOString(),
+    };
     DEV_USERS.push(newUser);
     return { ok: true, user: toPublicUser(newUser) };
   },
@@ -100,6 +123,28 @@ export const authService = {
 
   updateUserRole(id: string, role: UserRole): void {
     const u = DEV_USERS.find(x => x.id === id);
-    if (u) u.role = role;
+    if (u) {
+      u.role = role;
+      // Admins must have 2FA enforced
+      if (role === 'admin') u.twoFactorEnabled = true;
+    }
+  },
+
+  setUserStatus(id: string, status: 'active' | 'disabled'): void {
+    const u = DEV_USERS.find(x => x.id === id);
+    if (u) u.status = status;
+  },
+
+  setUser2FA(id: string, enabled: boolean): void {
+    const u = DEV_USERS.find(x => x.id === id);
+    if (u) u.twoFactorEnabled = enabled;
+  },
+
+  resetPassword(id: string, newPassword: string): { ok: boolean; error?: string } {
+    if (!newPassword.trim()) return { ok: false, error: 'Password required' };
+    const u = DEV_USERS.find(x => x.id === id);
+    if (!u) return { ok: false, error: 'User not found' };
+    u.password = newPassword;
+    return { ok: true };
   },
 };

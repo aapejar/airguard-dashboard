@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { LayoutDashboard, ScrollText, Sliders, Settings, LogOut, ChevronLeft, ChevronRight, Shield, FileCode2, Users } from 'lucide-react';
+import { LayoutDashboard, ScrollText, Sliders, Settings, LogOut, ChevronLeft, ChevronRight, Shield, FileCode2, Users, ClipboardList } from 'lucide-react';
 import { SidebarNavItem } from './SidebarNavItem';
 import { useAuth } from '@/context/AuthContext';
 import type { UserRole } from '@/types/sensor';
@@ -17,6 +17,7 @@ const allNav: NavDef[] = [
   { to: '/logs', icon: ScrollText, label: 'Data Logs', roles: ['admin', 'operator', 'user'] },
   { to: '/control', icon: Sliders, label: 'Control', roles: ['admin', 'operator'] },
   { to: '/design', icon: FileCode2, label: 'System Design', roles: ['admin', 'operator', 'user'] },
+  { to: '/audit', icon: ClipboardList, label: 'Audit Log', roles: ['admin'] },
   { to: '/settings', icon: Settings, label: 'Settings', roles: ['admin'] },
   { to: '/users', icon: Users, label: 'Users', roles: ['admin'] },
 ];

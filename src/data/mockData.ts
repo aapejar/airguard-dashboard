@@ -63,5 +63,5 @@ export const mockSettings: SystemSettings = {
 export const mockUsers: User[] = [
   { id: '1', username: 'admin', role: 'admin' },
   { id: '2', username: 'operator', role: 'operator' },
-  { id: '3', username: 'viewer', role: 'user' },
+  { id: '3', username: 'user', role: 'user' },
 ];
