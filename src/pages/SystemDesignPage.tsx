@@ -1,7 +1,7 @@
 import { DashboardLayout } from '@/components/DashboardLayout';
 import { useDevice } from '@/context/DeviceContext';
 import { cn } from '@/lib/utils';
-import { ArrowDown, ArrowRight, Cpu, Wifi, BarChart3, Settings2, ShieldCheck, RefreshCw } from 'lucide-react';
+import { ArrowDown, ArrowRight, Cpu, Wifi, BarChart3, Settings2, ShieldCheck, RefreshCw, Database, Monitor, Zap } from 'lucide-react';
 
 const flowSteps = [
   { icon: Cpu, title: 'System Initialization', desc: 'ESP32 boots, connects to WiFi, initializes sensors (MH-Z19B)' },
@@ -14,8 +14,9 @@ const flowSteps = [
 ];
 
 export default function SystemDesignPage() {
-  const { thresholds } = useDevice();
+  const { thresholds, latest, getEvaluation } = useDevice();
   const { warningThreshold: warn, criticalThreshold: crit, hysteresis } = thresholds;
+  const evalSnap = getEvaluation();
 
   const controlRules = [
     {
@@ -130,6 +131,70 @@ export default function SystemDesignPage() {
                 <p className="text-xs text-muted-foreground">ppm</p>
               </div>
             </div>
+          </div>
+
+          {/* Current Evaluation Snapshot */}
+          <div className="panel p-6">
+            <h3 className="text-sm font-semibold text-foreground uppercase tracking-wider mb-4 flex items-center gap-2">
+              <Zap className="h-4 w-4 text-primary" />
+              Current Evaluation Snapshot
+            </h3>
+            <div className="space-y-3 text-sm">
+              <div className="grid grid-cols-2 gap-3">
+                <div className="bg-muted/30 rounded-md p-3">
+                  <p className="text-xs text-muted-foreground">Indoor CO₂</p>
+                  <p className="font-mono font-semibold text-foreground">{latest.indoorCO2} ppm</p>
+                </div>
+                <div className="bg-muted/30 rounded-md p-3">
+                  <p className="text-xs text-muted-foreground">Outdoor CO₂</p>
+                  <p className="font-mono font-semibold text-foreground">{latest.outdoorCO2} ppm</p>
+                </div>
+              </div>
+              <div className="border-l-2 border-primary pl-3 py-1">
+                <p className="text-xs text-muted-foreground">Active rule</p>
+                <p className="font-mono text-foreground">{evalSnap.ruleLabel}</p>
+              </div>
+              <div className="border-l-2 border-success pl-3 py-1">
+                <p className="text-xs text-muted-foreground">Decision</p>
+                <p className="text-foreground">{evalSnap.decision}</p>
+              </div>
+              <div className="border-l-2 border-warning pl-3 py-1">
+                <p className="text-xs text-muted-foreground">Recommended action</p>
+                <p className="font-mono text-foreground">
+                  Fan {evalSnap.recommendation.fanStatus} · Damper {evalSnap.recommendation.damperAction}
+                </p>
+              </div>
+              <p className="text-xs text-muted-foreground italic">{evalSnap.notes}</p>
+            </div>
+          </div>
+
+          {/* Data Flow */}
+          <div className="panel p-6">
+            <h3 className="text-sm font-semibold text-foreground uppercase tracking-wider mb-4">Data Flow</h3>
+            <div className="flex items-center justify-between gap-2 text-xs">
+              <div className="flex-1 text-center bg-muted/30 rounded-md p-3">
+                <Cpu className="h-5 w-5 text-primary mx-auto mb-1" />
+                <p className="font-semibold text-foreground">ESP32</p>
+                <p className="text-muted-foreground text-[10px]">MH-Z19B sensor</p>
+              </div>
+              <ArrowRight className="h-4 w-4 text-muted-foreground shrink-0" />
+              <div className="flex-1 text-center bg-muted/30 rounded-md p-3">
+                <Database className="h-5 w-5 text-primary mx-auto mb-1" />
+                <p className="font-semibold text-foreground">Backend API</p>
+                <p className="text-muted-foreground text-[10px]">Node / Express</p>
+              </div>
+              <ArrowRight className="h-4 w-4 text-muted-foreground shrink-0" />
+              <div className="flex-1 text-center bg-muted/30 rounded-md p-3">
+                <Monitor className="h-5 w-5 text-primary mx-auto mb-1" />
+                <p className="font-semibold text-foreground">Dashboard</p>
+                <p className="text-muted-foreground text-[10px]">React SPA</p>
+              </div>
+            </div>
+            <p className="text-[11px] text-muted-foreground mt-3 leading-relaxed">
+              Device pushes readings + heartbeats to the backend. Dashboard polls{' '}
+              <span className="font-mono text-foreground">/api/devices/:id/readings/latest</span> every few seconds and dispatches control commands via{' '}
+              <span className="font-mono text-foreground">/api/devices/:id/control</span>, which the ESP32 polls and applies.
+            </p>
           </div>
         </div>
       </div>
