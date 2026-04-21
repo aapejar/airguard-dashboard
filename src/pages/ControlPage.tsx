@@ -267,6 +267,40 @@ export default function ControlPage() {
             )}
           </div>
         )}
+
+        {/* Command History */}
+        <div className="panel p-5">
+          <div className="flex items-center gap-2 mb-3">
+            <History className="h-4 w-4 text-primary" />
+            <h3 className="text-xs text-muted-foreground uppercase tracking-wider font-semibold">Recent Commands</h3>
+          </div>
+          {commandHistory.length === 0 ? (
+            <p className="text-xs text-muted-foreground py-2">No commands sent yet.</p>
+          ) : (
+            <div className="space-y-2">
+              {commandHistory.slice(0, 6).map(rec => (
+                <div key={rec.id} className="flex items-center justify-between bg-muted/30 rounded-md px-3 py-2 text-xs font-mono">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-foreground truncate">
+                      {rec.command.controlMode} · Fan {rec.command.fanStatus} · Damper {rec.command.damperAngle}°
+                    </p>
+                    <p className="text-muted-foreground text-[10px] mt-0.5">
+                      {new Date(rec.timestamp).toLocaleTimeString()}{rec.actor ? ` · ${rec.actor}` : ''}
+                    </p>
+                  </div>
+                  <span className={cn(
+                    'text-[10px] uppercase font-semibold px-2 py-0.5 rounded shrink-0',
+                    rec.result === 'success' && 'bg-success/15 text-success',
+                    rec.result === 'pending' && 'bg-warning/15 text-warning',
+                    rec.result === 'failed' && 'bg-destructive/15 text-destructive',
+                  )}>
+                    {rec.result}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
 
       <AlertDialog open={showConfirm} onOpenChange={setShowConfirm}>
