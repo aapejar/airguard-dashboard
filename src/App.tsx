@@ -11,6 +11,7 @@ import ControlPage from "@/pages/ControlPage";
 import SettingsPage from "@/pages/SettingsPage";
 import SystemDesignPage from "@/pages/SystemDesignPage";
 import UsersPage from "@/pages/UsersPage";
+import AuditLogPage from "@/pages/AuditLogPage";
 import NotFound from "@/pages/NotFound";
 import type { ReactNode } from "react";
 import type { UserRole } from "@/types/sensor";
@@ -51,6 +52,7 @@ function AppRoutes() {
       <Route path="/design" element={<ProtectedRoute><SystemDesignPage /></ProtectedRoute>} />
       <Route path="/settings" element={<ProtectedRoute roles={['admin']}><SettingsPage /></ProtectedRoute>} />
       <Route path="/users" element={<ProtectedRoute roles={['admin']}><UsersPage /></ProtectedRoute>} />
+      <Route path="/audit" element={<ProtectedRoute roles={['admin']}><AuditLogPage /></ProtectedRoute>} />
       <Route path="*" element={<NotFound />} />
     </Routes>
   );

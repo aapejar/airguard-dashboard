@@ -39,7 +39,7 @@ export default function DataLogsPage() {
           Clear All Logs
         </button>
       </div>
-      <LogsTable data={history} paginated />
+      <LogsTable data={history} paginated showFilters />
 
       <AlertDialog open={showClearConfirm} onOpenChange={setShowClearConfirm}>
         <AlertDialogContent className="bg-card border-border">
