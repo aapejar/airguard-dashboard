@@ -3,11 +3,13 @@ import { SensorCard } from '@/components/SensorCard';
 import { CO2Chart } from '@/components/CO2Chart';
 import { AlertsPanel } from '@/components/AlertsPanel';
 import { SystemStatusPanel } from '@/components/SystemStatusPanel';
-import { Wind, Fan, Gauge, Activity, ToggleRight, PlayCircle } from 'lucide-react';
+import { RuntimeSnapshot } from '@/components/RuntimeSnapshot';
+import { Wind, Fan, Gauge, Activity, ToggleRight, PlayCircle, AlertOctagon } from 'lucide-react';
 import { useDevice } from '@/context/DeviceContext';
 
 export default function DashboardPage() {
   const { latest, status, history, alerts, clearAlerts, thresholds, isReadyState, resumeSimulation } = useDevice();
+  const offline = !status.deviceOnline;
 
   const getCO2Status = (val: number): 'normal' | 'warning' | 'critical' => {
     if (val >= thresholds.criticalThreshold) return 'critical';
@@ -24,12 +26,25 @@ export default function DashboardPage() {
           <p className="text-xs text-muted-foreground mt-0.5">Real-time air quality overview</p>
         </div>
         <div className="flex items-center gap-2">
-          <span className="h-2 w-2 rounded-full bg-success animate-pulse-glow" />
-          <span className="text-xs text-muted-foreground font-mono">
-            {status.deviceOnline ? 'Connected' : 'Offline'}
+          <span className={`h-2 w-2 rounded-full animate-pulse-glow ${status.deviceOnline ? 'bg-success' : 'bg-destructive'}`} />
+          <span className={`text-xs font-mono ${status.deviceOnline ? 'text-muted-foreground' : 'text-destructive'}`}>
+            {status.deviceOnline ? 'Connected' : 'Offline — showing last known reading'}
           </span>
         </div>
       </div>
+
+      {offline && (
+        <div className="panel p-4 mb-4 flex items-center gap-3 border-destructive/30">
+          <AlertOctagon className="h-5 w-5 text-destructive shrink-0" />
+          <div>
+            <p className="text-sm font-semibold text-foreground">Device is offline</p>
+            <p className="text-xs text-muted-foreground">
+              No heartbeat received recently. Sensor values shown below are the last known reading from{' '}
+              {new Date(latest.timestamp).toLocaleString()}.
+            </p>
+          </div>
+        </div>
+      )}
 
       {isReadyState && (
         <div className="panel p-4 mb-4 flex items-center justify-between border-primary/30">
@@ -94,6 +109,7 @@ export default function DashboardPage() {
         </div>
         <div className="space-y-4">
           <SystemStatusPanel status={status} />
+          <RuntimeSnapshot />
           <AlertsPanel alerts={alerts} onClear={clearAlerts} />
         </div>
       </div>
