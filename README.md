@@ -1,162 +1,448 @@
 # AirGuard Pro
 
-**Smart Air Quality Monitoring & Ventilation Control Dashboard**
-A professional, engineering-grade IoT dashboard for ESP32-based air quality systems. Frontend-only React app, ready for backend integration.
+> Smart air quality monitoring & ventilation control system for ESP32-based mechatronics projects.
+> A production-ready React frontend designed to integrate with a real backend running on an Ubuntu server.
 
 ---
 
-## 🎯 Project Overview
+## Table of Contents
 
-AirGuard Pro is a real-time air quality monitoring and ventilation control system designed for academic/industrial mechatronics projects. It provides a complete frontend for an ESP32 + MH-Z19B (CO₂ sensor) device, with hysteresis-based on/off control logic, role-based access, and a fully API-ready architecture.
-
----
-
-## ✨ Features
-
-### Authentication & Access Control
-- Structured username/password authentication via dedicated `authService` (backend-ready surface — `login`, `verify2FA`, `logout`)
-- **No credentials exposed in the UI** — login screen displays "Authorized personnel only" instead of demo accounts
-- **Failed-attempt protection**: max 3 attempts, then automatic 60-second lockout (configurable in `src/config`)
-- **Session inactivity auto-logout** after 10 minutes of no user activity (mouse/keyboard/touch)
-- **2FA simulation** for admin accounts (TOTP-style 6-digit code) — service issues a `challengeId` and validates server-side-equivalent logic, ready to swap for real Authy / Google Authenticator
-- Session persistence via `localStorage` (`airguard.session`) with hydrate-on-mount
-- Three roles with route-level **and** UI-level enforcement:
-  - **Admin** — full access (control, settings, user management, log deletion, threshold config)
-  - **Operator** — dashboard, control panel, view/clear logs, threshold config (no settings/users)
-  - **User** — read-only (dashboard + logs + system design)
-- **User Management** (admin only): create users, assign/change roles, delete users — every action audited
-- **Audit logging** of all auth events (login success/failure, 2FA challenge, invalid 2FA, logout, inactivity timeout, user CRUD) into the unified Recent Alerts feed
-- **Command attribution**: every control action and threshold change is logged with the acting username
-- Logout button always accessible in the sidebar; manual vs inactivity logout distinguished in the audit log
-
-### Dashboard
-- Live indoor/outdoor CO₂ readings with status coloring (uses configurable thresholds)
-- Fan, damper, ventilation, and control mode cards
-- CO₂ trend chart (50 seeded historical points)
-- System status panel (online/offline, uptime, firmware, WiFi signal)
-- **Recent Alerts** with manual clear button
-- **Ready State** banner: after 5 polling cycles, simulation pauses and waits for real device data; admin/operator can resume
-
-### Control Panel
-- View active command status (mode/fan/damper)
-- **Configurable CO₂ thresholds** (warning, critical, hysteresis) — moved here from Settings
-- Threshold changes apply live and propagate to System Design page
-- AUTO/MANUAL mode toggle
-- Manual override: fan ON/OFF switch + damper angle slider (0–90°)
-- Confirmation dialog before applying commands
-- Command lock prevents duplicate rapid actions
-
-### Settings (Admin Only)
-- Device configuration (name, location, API endpoint URL)
-- Polling interval & request timeout
-- Feature toggles (heartbeat, notifications, auto-recovery)
-- CO₂ thresholds **removed from here** (moved to Control)
-
-### Data Logs
-- Paginated table of historical sensor readings
-- Clear all logs (with confirmation)
-
-### System Design
-- Documents software flow (init → read → validate → process → control → send → loop)
-- **Live control logic rules** that reflect current threshold values from Control page
-- Threshold parameters card (warning, critical, hysteresis)
+1. [Project Overview](#1-project-overview)
+2. [Problem Statement & Goals](#2-problem-statement--goals)
+3. [Feature Summary](#3-feature-summary)
+4. [Pages — Detailed Responsibilities](#4-pages--detailed-responsibilities)
+5. [Role-Based Access Matrix](#5-role-based-access-matrix)
+6. [Authentication Flow](#6-authentication-flow)
+7. [Dashboard Behavior](#7-dashboard-behavior)
+8. [Data Logs Behavior](#8-data-logs-behavior)
+9. [Control Behavior](#9-control-behavior)
+10. [System Design Behavior](#10-system-design-behavior)
+11. [Settings Behavior](#11-settings-behavior)
+12. [User Management Behavior](#12-user-management-behavior)
+13. [Alerts vs Audit Logs](#13-alerts-vs-audit-logs)
+14. [Data Lifecycle](#14-data-lifecycle)
+15. [State Management](#15-state-management)
+16. [Service / API Layer](#16-service--api-layer)
+17. [API Contract](#17-api-contract)
+18. [ESP32 Integration](#18-esp32-integration)
+19. [Project Structure](#19-project-structure)
+20. [Important Components](#20-important-components)
+21. [Tech Stack](#21-tech-stack)
+22. [Configuration System](#22-configuration-system)
+23. [Current Limitations](#23-current-limitations)
+24. [Production / Backend Readiness](#24-production--backend-readiness)
+25. [Deployment Plan (Ubuntu Server)](#25-deployment-plan-ubuntu-server)
+26. [Future Improvements Roadmap](#26-future-improvements-roadmap)
 
 ---
 
-## 🏗️ Architecture
+## 1. Project Overview
 
-### State Management
-- **`AuthContext`** — user, users list, login/2FA/logout, user CRUD, role checks (`hasRole`)
-  - Persists session in `localStorage` (`airguard.session`)
-  - Persists users in `localStorage` (`airguard.users`)
-- **`DeviceContext`** — single source of truth for device data
-  - `latest`, `status`, `history`, `alerts`, `thresholds`
-  - `sendCommand` (locked), `clearHistory`, `clearAlerts`, `updateThresholds`, `resumeSimulation`
-  - 5-second polling, 15-second heartbeat timeout for offline detection
-  - Cycle counter — after 5 cycles enters "ready state" awaiting real data
+**AirGuard Pro** is a full-featured frontend for an indoor air-quality and ventilation control system built around an **ESP32 microcontroller** with an **MH-Z19B CO₂ sensor**, an exhaust fan, and a motorized damper. The frontend behaves like an industrial IoT management console: live monitoring, control, configuration, role-based access, audit logging, and a dedicated documentation page that mirrors the embedded firmware logic.
 
-### Service Layer (`src/services/api.ts`)
-All API calls go through a centralized layer with:
-- `fetchWithRetry` (timeout via `AbortController` + linear backoff)
-- Validators (`validateSensorReading`, `validateSystemStatus`)
-- Mock fallback when no backend reachable
+The system targets a hybrid demo + production model:
+- **Demo / academic context** — Seeded historical data + simulated polling so the UI is always meaningful.
+- **Production** — Designed to switch over to a real backend (Node.js/Express) and live ESP32 devices without touching the UI.
 
-### Configuration (`src/config/index.ts`)
-Centralized config: `apiBaseUrl`, `pollingInterval`, `requestTimeout`, `maxRetries`, `heartbeatTimeout`, `maxHistorySize`, `defaultDeviceId`. Switchable via `VITE_APP_ENV` or `window.__AIRGUARD_CONFIG__`.
+## 2. Problem Statement & Goals
 
-### API Endpoints (Frontend → Backend)
-| Method | Path | Purpose |
-|---|---|---|
-| GET | `/api/devices/:id/readings/latest` | Latest sensor reading |
-| GET | `/api/devices/:id/readings?limit=N` | Historical readings |
-| DELETE | `/api/devices/:id/readings` | Clear logs |
-| GET | `/api/devices/:id/status` | System status / heartbeat |
-| GET | `/api/devices/:id/settings` | Device settings |
-| PUT | `/api/devices/:id/settings` | Update settings |
-| POST | `/api/devices/:id/control` | Send control command |
-| POST | `/api/auth/login` | Authenticate user |
+Indoor CO₂ buildup degrades cognitive performance and air quality. A simple closed-loop ventilation system can mitigate this, but operators need:
+
+- Real-time visibility into indoor vs outdoor CO₂.
+- A **safe override** capability (manual fan / damper control).
+- Threshold tuning that takes effect immediately and is reflected in the documented logic.
+- Strict access control so only authorized people can change settings or send commands.
+- A complete activity trail for security review.
+
+**Project goals:**
+1. Provide a production-grade frontend that visualizes ESP32 telemetry.
+2. Implement on-off control with hysteresis dead-band.
+3. Deliver role-based UI with admin / operator / user separation.
+4. Add a secure authentication layer with admin 2FA.
+5. Keep all design choices documented in-app on the System Design page.
+
+## 3. Feature Summary
+
+- 🔐 **Authentication** — username/password + admin 2FA, brute-force lockout, inactivity auto-logout, session persistence
+- 👥 **User management** — admin CRUD, role assignment, account enable/disable, 2FA toggle, password reset
+- 📊 **Dashboard** — live sensor cards, CO₂ trend chart, system status, runtime snapshot, system alerts, ready-state indicator
+- 🎛️ **Control console** — AUTO/MANUAL mode, manual fan + damper control, threshold editor with hysteresis, command history, restore defaults
+- 📝 **Data logs** — seeded history + filters (status / mode / time range / search), pagination, expanded columns
+- 📐 **System design** — software flowchart, control logic rules, live threshold display, current evaluation snapshot, data flow panel
+- 📋 **Audit log** — admin-only activity trail (auth, control, settings, user mgmt) with filters and CSV export
+- ⚙️ **Settings** — sectioned configuration: device / connectivity / security / notifications / system behavior, with save & reset
+- 🔄 **Hybrid data** — seeded simulation that pauses after N cycles into a "ready state" awaiting real data
+- 🌐 **API-ready service layer** — strict validation, retries, timeouts, fallbacks; ready to point at a real backend
+- 🛡️ **Strict alert vs audit separation** — system-only events on the dashboard alert panel, all user/auth activity in the audit log
+
+## 4. Pages — Detailed Responsibilities
+
+### `/` Login (`LoginPage.tsx`)
+- Username + password fields. Loading state on submit. Three failed attempts → 60-second lockout with visible countdown.
+- Admin accounts trigger a 2FA challenge with a 6-digit verification field.
+- No credentials are exposed in the UI ("Authorized personnel only — contact your administrator for access").
+
+### `/dashboard` Dashboard (`DashboardPage.tsx`)
+- All roles. Hero card for indoor CO₂ + secondary cards (outdoor, fan, damper, ventilation, mode).
+- **Connection state banner** when device is offline — clearly notes that values shown are the *last known reading*.
+- **System ready** banner when seeded simulation has completed (after `MAX_CYCLES`), with a Resume Simulation button.
+- Right column: System Status, **Runtime Snapshot** (active rule, decision, thresholds, heartbeat age), System Alerts.
+
+### `/logs` Data Logs (`DataLogsPage.tsx`)
+- All roles. Paginated `LogsTable` with search and three filters: time range, CO₂ status, control mode.
+- Columns: time, CO₂ in, CO₂ out, fan, damper angle, mode, ventilation, status badge.
+- Empty state guides the user when filters return nothing.
+- Admin can clear all logs (confirmation dialog).
+
+### `/control` Control (`ControlPage.tsx`)
+- Admin / operator only. Active command status panel showing currently confirmed device state.
+- **Threshold editor** — Warning, Critical, Hysteresis (ppm) with validation rules and *Restore default thresholds* button. Updates apply live and re-render the System Design page.
+- Mode toggle — AUTO vs MANUAL.
+- **Manual controls** (when MANUAL) — fan switch, damper slider (0°/45°/90°), Apply with confirm dialog, success/error feedback.
+- **Recent Commands panel** — shows the last 6 commands with timestamp, actor, and result badge (`pending` / `success` / `failed`).
+
+### `/design` System Design (`SystemDesignPage.tsx`)
+- All roles. Documents:
+  - Software flowchart (init → read → validate → process → decide → push → loop)
+  - On-off control logic (4 hysteresis-based rules)
+  - Live threshold parameters
+  - **Current Evaluation Snapshot** — interprets the latest reading against the active rule and shows the recommended action
+  - **Data Flow** — ESP32 → Backend → Dashboard panel
+
+### `/settings` Settings (`SettingsPage.tsx`)
+- Admin only. Sectioned configuration:
+  - **Device Configuration** — name, location, endpoint URL
+  - **Connectivity** — polling interval, request timeout, heartbeat timeout, reconnect interval, retry attempts
+  - **Security** — session timeout, max login attempts, enforce admin 2FA
+  - **Notifications** — in-app, alert on critical, alert on disconnect
+  - **System Behavior** — heartbeat monitoring, auto-recovery
+- Validation, save with success state, reset-to-defaults button. Thresholds intentionally moved to Control.
+
+### `/users` User Management (`UsersPage.tsx`)
+- Admin only. Create user form, role permissions matrix, full user table with status, 2FA, last-login, created-date columns.
+- Per-row actions: toggle 2FA, reset password (inline), enable/disable account, delete (cannot delete or demote yourself).
+
+### `/audit` Audit Log (`AuditLogPage.tsx`)
+- Admin only. Full activity trail. Filters by source (`auth` / `user` / `system` / `device`), level (`info` / `warning` / `critical`), and free-text search on message + actor. CSV export.
+
+## 5. Role-Based Access Matrix
+
+| Capability                          | admin | operator | user |
+|-------------------------------------|:-----:|:--------:|:----:|
+| Dashboard                           | ✅    | ✅       | ✅   |
+| Data logs (view)                    | ✅    | ✅       | ✅   |
+| System design                       | ✅    | ✅       | ✅   |
+| Control panel + threshold editing   | ✅    | ✅       | ❌   |
+| Settings                            | ✅    | ❌       | ❌   |
+| User management                     | ✅    | ❌       | ❌   |
+| Audit log                           | ✅    | ❌       | ❌   |
+| Clear data logs                     | ✅    | ❌       | ❌   |
+| 2FA at login                        | ✅ (forced) | optional | optional |
+
+Route guards live in `App.tsx` (`<ProtectedRoute roles={...}>`). Sidebar items are filtered by `user.role`. UI controls also disable themselves when a role lacks permission, providing defense in depth.
+
+## 6. Authentication Flow
+
+1. **Login** — `POST /api/auth/login` (`authService.login`). Returns one of:
+   - `success` → session created
+   - `requires_2fa` → for admins with 2FA enforced; UI shows TOTP form
+   - `invalid_credentials` → counted toward lockout
+2. **2FA** — `POST /api/auth/2fa/verify` (`authService.verify2FA`). Demo TOTP code `123456` is internal only.
+3. **Session persistence** — successful sessions are saved to `localStorage["airguard.session"]` and rehydrated on page load.
+4. **Failed-attempt lockout** — after `config.maxLoginAttempts` (default 3), login is locked for `config.loginLockoutDuration` (default 60s). Persisted in localStorage so it survives reloads.
+5. **Inactivity logout** — global listeners on `mousemove / keydown / click / scroll / touchstart` reset a `config.sessionInactivityTimeout` timer (default 10 min). On expiry the session is terminated and an audit entry is recorded.
+6. **Logout** — manual logout calls `authService.logout()`. Both manual and inactivity logouts emit an audit event.
+
+All auth events (success, failure, 2FA challenge, 2FA failure, inactivity logout, user CRUD) are emitted via `auditBus` and routed exclusively to the Audit Log — they never appear in the dashboard's System Alerts panel.
+
+## 7. Dashboard Behavior
+
+- **Sensor cards** — show the latest validated reading. Indoor CO₂ status (`normal` / `warning` / `critical`) is computed from live thresholds.
+- **CO₂ Trend chart** — Recharts line chart of indoor + outdoor over the in-memory history window.
+- **System Status** — device online/offline (driven entirely by heartbeat age), last update, signal strength, uptime, firmware version.
+- **Runtime Snapshot** — active rule, decision string, thresholds, hysteresis, heartbeat age, last reading timestamp.
+- **Alerts panel** — only system events: threshold breaches, disconnects, reconnects, faults, ready-state notification. Manually clearable.
+- **Offline banner** — surfaces when heartbeat exceeds `config.heartbeatTimeout`, explicitly tells the user that displayed values are the last known reading.
+- **Ready-state banner** — after `MAX_CYCLES` polling cycles, the simulation pauses; user can resume for demo purposes.
+
+## 8. Data Logs Behavior
+
+- Initial seed: 50 historical readings via `generateHistoricalReadings`.
+- Each appended reading is **deduplicated** by `id` and capped to `config.maxHistorySize` entries.
+- Filters: time range (1h / 24h / 7d / all), CO₂ status (normal / warning / critical), mode (AUTO / MANUAL), free-text search.
+- Pagination at 15 rows per page. Empty-state messaging guides the user.
+- Admin clear-all button is destructive and confirmed via dialog.
+- Table columns are designed to map 1:1 onto a future CSV/JSON export.
+
+## 9. Control Behavior
+
+- **AUTO** — backend / firmware regulates the fan and damper according to the threshold rules.
+- **MANUAL** — operator overrides take effect on the device after a confirmed `POST /api/devices/:id/control`.
+- **Threshold editor** — Warning, Critical, Hysteresis (ppm). Validation:
+  - Warning: 200–5000
+  - Critical: 400–5000 and `> warning`
+  - Hysteresis: 0–500
+  - Restore-default button resets to (900 / 1000 / 100).
+- **Command lifecycle** — every `sendCommand` is recorded as a `CommandRecord` in `commandHistory` (`pending → success | failed`). UI button shows `Applying…` while in flight. A command lock prevents concurrent submissions.
+- **Audit attribution** — every command logs the actor (username) and is visible on the Audit Log page.
+
+## 10. System Design Behavior
+
+The page intentionally mirrors the firmware's control loop so the team and reviewers can compare implementation to documentation:
+- **Software Flow** — 7 numbered steps from boot to loop.
+- **On-Off Control Logic** — 4 rules driven by live thresholds.
+- **Threshold Parameters (Live)** — re-renders the moment thresholds change on the Control page.
+- **Current Evaluation Snapshot** — applies the live rules to the most recent reading. Shows active rule, decision, recommended action, explanatory note.
+- **Data Flow** — ESP32 → Backend API → Dashboard with endpoint hints.
+
+## 11. Settings Behavior
+
+Sections, all admin-gated:
+- **Device** — name, location, endpoint URL.
+- **Connectivity** — polling interval (1–300 s), request timeout (1–60 s), heartbeat timeout (5–300 s), reconnect interval (1–60 s), retry attempts (0–10).
+- **Security** — session timeout (1–120 min), max login attempts (1–10), enforce-admin-2FA toggle.
+- **Notifications** — in-app, alert on critical, alert on disconnect.
+- **System Behavior** — heartbeat monitoring, auto-recovery (beta).
+- Save validates and persists; Reset reverts to defaults.
+
+CO₂ thresholds intentionally live on the **Control** page — never duplicated here.
+
+## 12. User Management Behavior
+
+- Backed by `authService` which keeps an in-memory user list (replaceable with a real `/api/users` endpoint).
+- Each user has: id, username, role (`admin` / `operator` / `user`), status (`active` / `disabled`), `twoFactorEnabled`, `lastLogin`, `createdAt`.
+- Actions per row: change role, toggle 2FA, reset password (inline), enable/disable, delete.
+- Self-protections: cannot delete, demote, or disable the currently signed-in user.
+- Permissions matrix is rendered alongside the list as a permanent reference.
+
+## 13. Alerts vs Audit Logs
+
+Two separate streams live in `DeviceContext`:
+
+| Stream      | Sources                          | Examples                                                                 | UI                                  |
+|-------------|----------------------------------|--------------------------------------------------------------------------|-------------------------------------|
+| `alerts`    | `system`, `device`               | Threshold breach, disconnect, reconnect, ready-state, sensor fault       | Dashboard "System Alerts" panel     |
+| `auditLog`  | `auth`, `user`                   | Login success/failure, 2FA, logout, command applied, threshold updated, user created/disabled | `/audit` page (admin only)         |
+
+Routing is enforced by `logEvent()` and the `auditBus` subscriber in `DeviceContext`.
+
+## 14. Data Lifecycle
+
+1. **Boot** — `seededHistory` (50 readings) seeded so the chart and logs are immediately meaningful.
+2. **Polling** — `DeviceContext.refresh()` runs every `config.pollingInterval` ms. It calls `api.getLatestReading` + `api.getSystemStatus`, validates them, dedupes by id, appends to history (capped at `config.maxHistorySize`), and updates `lastHeartbeatRef`.
+3. **Ready State** — after `MAX_CYCLES` (5) successful cycles, polling pauses and a system-info alert is emitted: "Seeded simulation completed — system ready, awaiting real device data." This avoids flooding the UI with synthetic data while still demonstrating the full pipeline.
+4. **Resume** — `resumeSimulation()` clears the flag and restarts polling.
+5. **Heartbeat watchdog** — separate 2 s interval compares `lastHeartbeatRef` with `config.heartbeatTimeout`. Transitions emit `online` / `offline` system alerts.
+
+## 15. State Management
+
+Two contexts, both above `BrowserRouter`:
+
+### `AuthContext`
+- Holds `user`, `users`, `failedAttempts`, `lockedUntil`.
+- Exposes `login`, `verify2FA`, `logout`, `createUser`, `deleteUser`, `updateUserRole`, `setUserStatus`, `setUser2FA`, `resetUserPassword`, `hasRole`.
+- Persists session and lockout state via `localStorage` keys `airguard.session`, `airguard.loginAttempts`, `airguard.loginLockedUntil`.
+- Emits all auth/admin events via `auditBus`.
+
+### `DeviceContext`
+- Holds `latest`, `status`, `history`, `alerts`, `auditLog`, `commandHistory`, `thresholds`, `cycleCount`, `isReadyState`, `heartbeatAge`.
+- Exposes `sendCommand`, `clearHistory`, `clearAlerts`, `clearAuditLog`, `refresh`, `updateThresholds`, `resetThresholds`, `resumeSimulation`, `logEvent`, `getEvaluation`.
+- Persists thresholds via `localStorage["airguard.thresholds"]`.
+
+### `auditBus`
+- Tiny pub/sub used so `AuthContext` (which sits above `DeviceContext`) can publish events that `DeviceContext` consumes into the unified audit log.
+
+## 16. Service / API Layer
+
+- `services/api.ts` — every backend call goes through `fetchWithRetry()` which adds `AbortController` timeouts and linear backoff retries (`config.maxRetries`, `config.retryBaseDelay`). On failure each method **falls back to mock data** so the UI never breaks during local development.
+- `services/authService.ts` — public surface (`login`, `verify2FA`, `logout`, user CRUD) maps 1:1 onto the planned backend (`/api/auth/*`, `/api/users/*`). Today it runs in-memory; swapping in HTTP calls is a one-file change.
+- `services/validators.ts` — runtime guards for `SensorReading` and `SystemStatus`. Anything malformed never enters state.
+- `services/auditBus.ts` — pub/sub bridge between contexts.
+
+## 17. API Contract
+
+### Frontend → Backend
+
+| Method | Path                                          | Purpose                                |
+|--------|-----------------------------------------------|----------------------------------------|
+| GET    | `/api/devices/:id/readings/latest`            | Latest validated `SensorReading`       |
+| GET    | `/api/devices/:id/readings?limit=N`           | Last N readings                        |
+| DELETE | `/api/devices/:id/readings`                   | Clear stored history                   |
+| GET    | `/api/devices/:id/status`                     | `SystemStatus`                         |
+| GET    | `/api/devices/:id/settings`                   | `SystemSettings`                       |
+| PUT    | `/api/devices/:id/settings`                   | Update settings                        |
+| POST   | `/api/devices/:id/control`                    | Send `ControlCommand`                  |
+| POST   | `/api/auth/login`                             | `{ status, user? \| pendingUser?, ... }` |
+| POST   | `/api/auth/2fa/verify`                        | TOTP verification                      |
+| POST   | `/api/auth/logout`                            | Tear down session                      |
 
 ### ESP32 → Backend
-| Method | Path | Purpose |
-|---|---|---|
-| POST | `/api/device/readings` | Push sensor readings |
-| POST | `/api/device/heartbeat` | Heartbeat |
-| GET | `/api/device/:id/command` | Pull pending command |
 
----
+| Method | Path                                          | Body                                    |
+|--------|-----------------------------------------------|-----------------------------------------|
+| POST   | `/api/device/readings`                        | `DeviceReadingPayload` (with `apiKey`)  |
+| POST   | `/api/device/heartbeat`                       | `DeviceHeartbeatPayload`                |
+| GET    | `/api/device/:id/command`                     | `DeviceCommandResponse` (latest desired state) |
 
-## 📁 Project Structure
+### Payload shapes (see `src/types/sensor.ts`)
+
+```ts
+SensorReading      { id, deviceId, indoorCO2, outdoorCO2, fanStatus, damperAngle, ventilationStatus, controlMode, timestamp }
+SystemStatus       { deviceOnline, lastHeartbeat, uptime, firmwareVersion, wifiSignal }
+ControlCommand     { controlMode, fanStatus, damperAngle }
+CommandRecord      { id, timestamp, actor?, command, result, error? }
+EvaluationSnapshot { rule, ruleLabel, decision, recommendation, notes }
+User               { id, username, role, status?, lastLogin?, twoFactorEnabled?, createdAt? }
+```
+
+## 18. ESP32 Integration
+
+Recommended firmware loop:
+
+1. Connect to WiFi → POST `/api/device/heartbeat` (uptime, signal, firmware).
+2. Read MH-Z19B every `refreshInterval` seconds.
+3. Validate range (0–5000 ppm).
+4. Apply local on-off control with hysteresis (same rules documented in the System Design page).
+5. POST `/api/device/readings` with the new sample + current actuator state.
+6. GET `/api/device/:id/command` — if a manual override is pending, apply it.
+7. Loop.
+
+The backend mediates between dashboard commands and the device. This gives the dashboard authoritative confirmation (no optimistic updates) and lets the device run autonomously even if the dashboard disconnects.
+
+## 19. Project Structure
 
 ```
 src/
-├── components/         # Reusable UI (SensorCard, CO2Chart, AlertsPanel, …)
-├── pages/              # Route pages (Dashboard, Control, Logs, Settings, Users, …)
-├── context/            # AuthContext, DeviceContext
-├── services/           # api.ts, validators.ts
-├── config/             # Centralized configuration
-├── data/               # Mock/seed data
-├── types/              # Shared TS types
-└── lib/                # Utilities
+├── components/        # Reusable UI building blocks
+│   ├── ui/            # shadcn/ui primitives
+│   ├── AlertsPanel.tsx
+│   ├── AppSidebar.tsx
+│   ├── CO2Chart.tsx
+│   ├── DashboardLayout.tsx
+│   ├── LogsTable.tsx
+│   ├── RuntimeSnapshot.tsx
+│   ├── SensorCard.tsx
+│   ├── SystemStatusPanel.tsx
+│   └── …
+├── pages/             # One file per route
+│   ├── LoginPage.tsx
+│   ├── DashboardPage.tsx
+│   ├── DataLogsPage.tsx
+│   ├── ControlPage.tsx
+│   ├── SystemDesignPage.tsx
+│   ├── SettingsPage.tsx
+│   ├── UsersPage.tsx
+│   └── AuditLogPage.tsx
+├── context/           # Global state providers
+│   ├── AuthContext.tsx
+│   └── DeviceContext.tsx
+├── services/          # API + auth + validation
+│   ├── api.ts
+│   ├── authService.ts
+│   ├── auditBus.ts
+│   └── validators.ts
+├── data/              # Seeded mock data
+├── types/             # Shared TypeScript types
+├── config/            # Centralized environment config
+└── hooks/             # React hooks
 ```
 
----
+## 20. Important Components
 
-## 🔐 Default Accounts (Development Only)
+| Component             | Responsibility                                                         |
+|-----------------------|------------------------------------------------------------------------|
+| `AppSidebar`          | Role-filtered navigation, collapsible, signed-in user + logout         |
+| `DashboardLayout`     | Sidebar + main content frame for all authenticated pages               |
+| `SensorCard`          | Single metric with status badge, highlight variant for primary metric  |
+| `CO2Chart`            | Indoor/outdoor trend line chart                                        |
+| `SystemStatusPanel`   | Online/offline, signal, uptime, firmware                               |
+| `RuntimeSnapshot`     | Live evaluation summary on the dashboard                               |
+| `AlertsPanel`         | System-only events (threshold breach, disconnect, reconnect)           |
+| `LogsTable`           | Sortable, filterable, paginated sensor history                         |
+| `ProtectedRoute`      | Auth + role guard for routes (in `App.tsx`)                            |
 
-> ⚠️ Internal credentials live in `src/services/authService.ts` and are **never** displayed in the UI.
-> In production these will be removed and authentication will be delegated to the backend.
+## 21. Tech Stack
 
-| Username   | Password      | Role     | 2FA                |
-|------------|---------------|----------|--------------------|
-| `admin`    | `admin123`    | admin    | required (`123456`) |
-| `operator` | `operator123` | operator | –                  |
-| `viewer`   | `user123`     | user     | –                  |
+**Frontend**
+- React 18, TypeScript 5, Vite 5
+- Tailwind CSS v3 (HSL-based design tokens)
+- Recharts (charts), lucide-react (icons), framer-motion (transitions)
+- shadcn/ui primitives (Radix under the hood)
+- React Router v6, TanStack Query (configured but not heavily used yet)
 
-### Security model
+**Tooling**
+- Vite for dev/build, Vitest + Playwright for tests
+- ESLint, TypeScript strict mode
 
-| Concern                | Mechanism                                                                 |
-|------------------------|---------------------------------------------------------------------------|
-| Brute-force protection | Failed attempts persisted; lockout after `config.maxLoginAttempts` (3)    |
-| Session theft window   | Auto-logout after `config.sessionInactivityTimeout` (10 min) of no input  |
-| Privilege escalation   | RBAC enforced at route guard AND UI affordance level                      |
-| Audit trail            | All auth + control events flow through `auditBus` → unified alerts feed   |
-| Backend readiness      | `authService` mirrors REST shape (`login`/`verify2FA`/`logout`)           |
+**Targeted backend**
+- Node.js + Express on Ubuntu (planned)
+- ESP32 firmware in C++ via Arduino or PlatformIO
 
----
+## 22. Configuration System
 
-## 🛠️ Tech Stack
+`src/config/index.ts` holds a single frozen config object selected by `import.meta.env.MODE` (or `VITE_APP_ENV`). Runtime override via `window.__AIRGUARD_CONFIG__` makes Docker / runtime injection possible.
 
-- React 18 · TypeScript · Vite
-- Tailwind CSS + shadcn/ui
-- React Router · TanStack Query
-- Recharts · Framer Motion · lucide-react
+Tunables: `apiBaseUrl`, `pollingInterval`, `requestTimeout`, `maxRetries`, `retryBaseDelay`, `heartbeatTimeout`, `maxHistorySize`, `defaultDeviceId`, `sessionInactivityTimeout`, `maxLoginAttempts`, `loginLockoutDuration`.
 
----
+## 23. Current Limitations
 
-## 🚀 Roadmap
+- Pure frontend — credentials and user list still live in `authService`. **Replace with backend before any real deployment.**
+- No real-time transport yet (no WebSocket / SSE) — uses polling.
+- Settings page persists changes only in component state (not yet wired through to a backend `PUT /settings`).
+- 2FA is a static demo code (`123456`) — backend should enforce a real TOTP secret per user.
+- Audit log is in-memory; not persisted across full reloads (alerts seeded from mockData are).
+- No Lovable Cloud / Supabase backend wired yet.
 
-- Connect to a real Node.js/Express backend on Ubuntu
-- Real 2FA via TOTP (Authy / Google Authenticator)
-- Multi-device dashboard
-- CSV export for logs
-- WebSocket-based push updates
+## 24. Production / Backend Readiness
+
+The frontend is intentionally ready to swap to a real backend with minimal code change:
+
+- All HTTP calls already pass through `fetchWithRetry` with timeout + retry semantics.
+- Strict `validateSensorReading` / `validateSystemStatus` reject malformed payloads.
+- No optimistic UI updates — confirmed device state from API drives `latest`.
+- Command lock prevents duplicate submissions.
+- `authService` exposes the exact public surface a real backend would.
+- Configuration is centralized and environment-aware.
+- Audit events are emitted via `auditBus` so server-side audit forwarding is a one-line subscription.
+
+## 25. Deployment Plan (Ubuntu Server)
+
+Suggested topology for the production deployment:
+
+1. **Backend** — Node.js + Express service exposing the API surface in §17, backed by SQLite/PostgreSQL.
+2. **Frontend** — `npm run build` produces a static bundle served by Nginx.
+3. **Reverse proxy** — Nginx terminates TLS, proxies `/api/*` to Node on `127.0.0.1:3000`.
+4. **Auth** — replace `authService` with a JWT-based backend; persist refresh tokens; add real TOTP via `otplib`.
+5. **Devices** — ESP32s authenticate with per-device API keys (`DeviceReadingPayload.apiKey`).
+6. **Process management** — `systemd` or `pm2` for the Node service; `ufw` to lock the firewall to 22/80/443.
+7. **Observability** — pipe audit + system events to a log file mounted into a log shipper.
+
+## 26. Future Improvements Roadmap
+
+**UI/UX**
+- Threshold reference lines on the CO₂ chart
+- Inactivity countdown toast with "Stay signed in" action
+- Per-page CSV/JSON export buttons
+- Dark/light theme toggle
+
+**Performance**
+- Move polling to WebSocket / SSE for sub-second updates
+- Virtualize the data logs table for large datasets
+- Memoize chart computations and split heavy panels into their own React Query queries
+
+**Scalability**
+- Multi-device device picker (state already keyed by `deviceId`)
+- Per-device thresholds and roles
+- Per-tenant data isolation in the backend
+
+**IoT integration**
+- OTA firmware updates from the dashboard
+- Calibration workflow for the MH-Z19B
+- Per-device alert routing (email / push / webhook)
+- Historical analytics: hourly/daily aggregates, exposure dashboards
+
+**Security**
+- Real TOTP secrets (server-side `otplib`)
+- Hashed passwords (bcrypt/argon2 server-side)
+- Audit-log shipping to a SIEM
+- Rate-limiting middleware on the backend
