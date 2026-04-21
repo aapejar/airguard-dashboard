@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useCallback, useEffect, useRef, type ReactNode } from 'react';
-import type { SensorReading, SystemStatus, ControlCommand, AlertItem, AlertSource } from '@/types/sensor';
+import type { SensorReading, SystemStatus, ControlCommand, AlertItem, AlertSource, CommandRecord, EvaluationSnapshot } from '@/types/sensor';
 import { config } from '@/config';
 import { api } from '@/services/api';
 import { generateHistoricalReadings, mockAlerts } from '@/data/mockData';
@@ -19,7 +19,12 @@ interface DeviceState {
   latest: SensorReading;
   status: SystemStatus;
   history: SensorReading[];
+  /** Real device/system alerts only (threshold breaches, disconnects, faults) */
   alerts: AlertItem[];
+  /** Activity / audit trail (auth, user actions, settings, control commands) */
+  auditLog: AlertItem[];
+  /** Last N control commands sent, with result */
+  commandHistory: CommandRecord[];
   thresholds: ControlThresholds;
   isLoading: boolean;
   isCommandPending: boolean;
@@ -36,8 +41,10 @@ interface DeviceContextType extends DeviceState {
   sendCommand: (cmd: ControlCommand, actor?: string) => Promise<boolean>;
   clearHistory: () => void;
   clearAlerts: () => void;
+  clearAuditLog: () => void;
   refresh: () => Promise<void>;
   updateThresholds: (t: Partial<ControlThresholds>, actor?: string) => void;
+  resetThresholds: (actor?: string) => void;
   /** Reset the cycle counter and re-arm seeded simulation */
   resumeSimulation: () => void;
   /** Append a structured event to the audit log */
@@ -46,18 +53,25 @@ interface DeviceContextType extends DeviceState {
     message: string,
     opts?: { source?: AlertSource; actor?: string },
   ) => void;
+  /** Compute current control logic evaluation snapshot from latest reading */
+  getEvaluation: () => EvaluationSnapshot;
+  /** Age (ms) since last successful heartbeat */
+  heartbeatAge: number;
 }
 
 const DeviceContext = createContext<DeviceContextType | null>(null);
 
 const THRESHOLDS_KEY = 'airguard.thresholds';
 const MAX_CYCLES = 5;
+const MAX_COMMAND_HISTORY = 25;
 
-const defaultThresholds: ControlThresholds = {
+export const DEFAULT_THRESHOLDS: ControlThresholds = {
   warningThreshold: 900,
   criticalThreshold: 1000,
   hysteresis: 100,
 };
+
+const defaultThresholds = DEFAULT_THRESHOLDS;
 
 function loadThresholds(): ControlThresholds {
   try {
