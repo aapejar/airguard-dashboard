@@ -52,6 +52,31 @@ export interface User {
   id: string;
   username: string;
   role: UserRole;
+  status?: 'active' | 'disabled';
+  lastLogin?: string | null;
+  twoFactorEnabled?: boolean;
+  createdAt?: string;
+}
+
+export interface CommandRecord {
+  id: string;
+  timestamp: string;
+  actor?: string;
+  command: ControlCommand;
+  result: 'success' | 'failed' | 'pending';
+  error?: string;
+}
+
+export interface EvaluationSnapshot {
+  rule:
+    | 'below-warning'
+    | 'dead-band'
+    | 'above-critical-outdoor-cleaner'
+    | 'above-critical-outdoor-worse';
+  ruleLabel: string;
+  decision: string;
+  recommendation: { fanStatus: 'ON' | 'OFF'; damperAction: 'OPEN' | 'CLOSE' | 'HOLD' };
+  notes: string;
 }
 
 export interface DeviceReadingPayload {
