@@ -160,7 +160,7 @@ All auth events (success, failure, 2FA challenge, 2FA failure, inactivity logout
 - **Sensor cards** — show the latest validated reading. Indoor CO₂ status (`normal` / `warning` / `critical`) is computed from live thresholds.
 - **CO₂ Trend chart** — Recharts line chart of indoor + outdoor over the in-memory history window.
 - **System Status** — device online/offline (driven entirely by heartbeat age), last update, signal strength, uptime, firmware version.
-- **Runtime Snapshot** — selected ventilation level, active rule, decision string, recommended actuator output, decision boundaries, min outdoor Δ, heartbeat age, last reading timestamp.
+- **Runtime Snapshot** — a compact decision-explanation panel. Top row shows raw inputs (indoor, outdoor, Δ with colour-coded gate status). The middle block shows the selected **ventilation level** + **active rule**. Reasoning text and the **mapped actuator output** (Fan + Damper) follow. A footer strip exposes live decision boundaries, min Δ, heartbeat age, and the last reading timestamp.
 - **Alerts panel** — only system events: threshold breaches, disconnects, reconnects, faults, ready-state notification. Manually clearable.
 - **Offline banner** — surfaces when heartbeat exceeds `config.heartbeatTimeout`, explicitly tells the user that displayed values are the last known reading.
 - **Ready-state banner** — after `MAX_CYCLES` polling cycles, the simulation pauses; user can resume for demo purposes.
