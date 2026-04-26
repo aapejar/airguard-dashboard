@@ -178,17 +178,42 @@ All auth events (success, failure, 2FA challenge, 2FA failure, inactivity logout
 
 - **AUTO** — backend / firmware delegates to the on-device **IF-ELSE supervisory layer**: sensors are evaluated, a ventilation level (0–3) is selected from the rule base, and the chosen level is mapped to actuator targets. Hysteresis only smooths transitions between adjacent levels.
 - **MANUAL** — operator overrides take effect on the device after a confirmed `POST /api/devices/:id/control`.
-- **Threshold editor** — Warning, Critical, Hysteresis (ppm). Validation:
-  - Warning: 200–5000
+- **Decision-boundary editor** (supervisory IF-ELSE layer). Validation:
   - `safeThreshold` 300–5000 ppm
   - `moderateThreshold` 400–5000 ppm and `> safe`
   - `highThreshold` 500–5000 ppm and `> moderate`
   - `minOutdoorDelta` 0–1000 ppm — minimum (indoor − outdoor) required to authorise ventilation
   - `hysteresis` 0–500 ppm — stabilization band, **not** the primary control method
-  - Hysteresis: 0–500
-  - Restore-default button resets to (900 / 1000 / 100).
+  - Restore-default button resets to (safe=700, moderate=900, high=1100, Δmin=50, stab=±50).
 - **Command lifecycle** — every `sendCommand` is recorded as a `CommandRecord` in `commandHistory` (`pending → success | failed`). UI button shows `Applying…` while in flight. A command lock prevents concurrent submissions.
 - **Audit attribution** — every command logs the actor (username) and is visible on the Audit Log page.
+
+### 9.1 Control Methodology — IF-ELSE Supervisory Control
+
+The system is **not** a low-level threshold-to-actuator on/off controller. It is structured as a layered supervisory control architecture, suitable for academic/mechatronics review:
+
+1. **Input layer** — sampled values: `indoorCO2`, `outdoorCO2`, `Δ = indoorCO2 − outdoorCO2`, current `controlMode`.
+2. **Decision layer (IF-ELSE rule base)** — selects a discrete **ventilation level**:
+
+   | Level | Label                  | Condition                                                                                       |
+   |-------|------------------------|-------------------------------------------------------------------------------------------------|
+   | 0     | Closed / Safe          | `IF indoor < safeThreshold`                                                                     |
+   | 0\*   | Blocked (override)     | `IF indoor ≥ safeThreshold AND Δ < minOutdoorDelta` — outdoor not advantageous                  |
+   | 1     | Light Ventilation      | `ELSE IF indoor < moderateThreshold AND Δ ≥ minOutdoorDelta`                                    |
+   | 2     | Medium Ventilation     | `ELSE IF indoor < highThreshold AND Δ ≥ minOutdoorDelta`                                        |
+   | 3     | Aggressive Ventilation | `ELSE indoor ≥ highThreshold AND Δ ≥ minOutdoorDelta`                                           |
+
+3. **Output mapping layer** — the chosen level is translated into actuator targets:
+
+   | Level | Damper angle | Fan |
+   |-------|--------------|-----|
+   | 0     | 0° (closed)  | OFF |
+   | 1     | 30°          | OFF |
+   | 2     | 60°          | ON  |
+   | 3     | 90° (open)   | ON  |
+
+4. **Execution layer** — actuators (relay + servo) drive to the mapped targets. MANUAL mode bypasses the decision layer and applies operator targets directly.
+5. **Stabilization** — `hysteresis` is a small ±band used only to smooth transitions between adjacent levels and avoid rapid switching. It is a supporting mechanism, not the primary control method.
 
 ## 10. System Design Behavior
 
