@@ -320,7 +320,7 @@ SensorReading      { id, deviceId, indoorCO2, outdoorCO2, fanStatus, damperAngle
 SystemStatus       { deviceOnline, lastHeartbeat, uptime, firmwareVersion, wifiSignal }
 ControlCommand     { controlMode, fanStatus, damperAngle }
 CommandRecord      { id, timestamp, actor?, command, result, error? }
-EvaluationSnapshot { rule, ruleLabel, decision, recommendation, notes }
+EvaluationSnapshot { rule, ventilationLevel, ventilationLabel, ruleLabel, decision, recommendation, recommendedDamperAngle, notes }
 User               { id, username, role, status?, lastLogin?, twoFactorEnabled?, createdAt? }
 ```
 
