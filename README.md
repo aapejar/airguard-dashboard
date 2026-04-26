@@ -193,15 +193,20 @@ All auth events (success, failure, 2FA challenge, 2FA failure, inactivity logout
 The system is **not** a low-level threshold-to-actuator on/off controller. It is structured as a layered supervisory control architecture, suitable for academic/mechatronics review:
 
 1. **Input layer** — sampled values: `indoorCO2`, `outdoorCO2`, `Δ = indoorCO2 − outdoorCO2`, current `controlMode`.
-2. **Decision layer (IF-ELSE rule base)** — selects a discrete **ventilation level**:
+   - A **positive Δ** means indoor air is worse than outdoor air.
+   - `minOutdoorDelta` is the **minimum required outdoor advantage** (in ppm) before ventilation above Level 0 is authorised. If outdoor air is not sufficiently cleaner, opening the damper would be counter-productive — so the supervisor blocks ventilation.
 
-   | Level | Label                  | Condition                                                                                       |
-   |-------|------------------------|-------------------------------------------------------------------------------------------------|
-   | 0     | Closed / Safe          | `IF indoor < safeThreshold`                                                                     |
-   | 0\*   | Blocked (override)     | `IF indoor ≥ safeThreshold AND Δ < minOutdoorDelta` — outdoor not advantageous                  |
-   | 1     | Light Ventilation      | `ELSE IF indoor < moderateThreshold AND Δ ≥ minOutdoorDelta`                                    |
-   | 2     | Medium Ventilation     | `ELSE IF indoor < highThreshold AND Δ ≥ minOutdoorDelta`                                        |
-   | 3     | Aggressive Ventilation | `ELSE indoor ≥ highThreshold AND Δ ≥ minOutdoorDelta`                                           |
+2. **Decision layer (IF-ELSE rule base)** — indoor CO₂ is matched against **non-overlapping intervals** to select a discrete **ventilation level**:
+
+   | Level | Label                  | Indoor interval                                  | Outdoor gate (Δ)         |
+   |-------|------------------------|--------------------------------------------------|--------------------------|
+   | 0     | Closed / Safe          | `indoor < safeThreshold`                         | —                        |
+   | 0\*   | Blocked (override)     | `indoor ≥ safeThreshold`                         | `Δ < minOutdoorDelta`    |
+   | 1     | Light Ventilation      | `safeThreshold ≤ indoor < moderateThreshold`     | `Δ ≥ minOutdoorDelta`    |
+   | 2     | Medium Ventilation     | `moderateThreshold ≤ indoor < highThreshold`     | `Δ ≥ minOutdoorDelta`    |
+   | 3     | Aggressive Ventilation | `indoor ≥ highThreshold`                         | `Δ ≥ minOutdoorDelta`    |
+
+   The intervals are mutually exclusive: every reading matches exactly one level. The override (0\*) only fires when indoor is at or above safe **and** outdoor air offers no advantage.
 
 3. **Output mapping layer** — the chosen level is translated into actuator targets:
 
@@ -215,13 +220,22 @@ The system is **not** a low-level threshold-to-actuator on/off controller. It is
 4. **Execution layer** — actuators (relay + servo) drive to the mapped targets. MANUAL mode bypasses the decision layer and applies operator targets directly.
 5. **Stabilization** — `hysteresis` is a small ±band used only to smooth transitions between adjacent levels and avoid rapid switching. It is a supporting mechanism, not the primary control method.
 
+#### 9.1.1 Worked example
+
+Boundaries (defaults): `safe=700`, `moderate=900`, `high=1100`, `minOutdoorDelta=50`, `hysteresis=±50`.
+
+- **Reading A** — indoor `950`, outdoor `420` → Δ = `+530`. Indoor sits in `[900, 1100)` → **Level 2 (Medium)**. Δ ≥ 50 ✓ → mapping: **Fan ON, Damper 60°**.
+- **Reading B** — indoor `950`, outdoor `920` → Δ = `+30`. Indoor would map to Level 2, but Δ < 50 → override fires → **Level 0\* (Blocked)**: Fan OFF, Damper 0°. Reasoning: opening the damper would not improve indoor quality.
+- **Reading C** — indoor `620`, outdoor `400` → Δ = `+220`. Indoor < 700 → **Level 0 (Closed / Safe)** regardless of Δ. No ventilation needed.
+
 ## 10. System Design Behavior
 
 The page intentionally mirrors the firmware's control loop so the team and reviewers can compare implementation to documentation:
-- **Software Flow** — 7 numbered steps from boot to loop.
-- **IF-ELSE Rule Base (Supervisory Layer)** — Levels 0–3 plus an "outdoor not advantageous" override, all driven by live decision boundaries.
-- **Decision Boundaries (Live)** — re-renders the moment boundaries change on the Control page.
-- **Current Evaluation Snapshot** — applies the live rules to the most recent reading. Shows active rule, decision, recommended action, explanatory note.
+- **Supervisory Control Flow** — numbered steps from boot to loop, prefaced with the three-stage architecture (Decision → Mapping → Execution).
+- **IF-ELSE Rule Base — Supervisory Decision Layer** — Levels 0–3 plus the "outdoor not advantageous" override, written as **non-overlapping intervals** with separate columns for the indoor interval and the Δ gate. The currently active rule is highlighted live, and an inline Δ-explanation block (with a numeric example) is rendered above the rule cards.
+- **How the decision is made / Why ventilation may be blocked** — two short reviewer-friendly notes summarise the selection rule and the blocking condition.
+- **Decision Boundaries (Live)** — compact 5-cell strip (safe / moderate / high / min Δ / stabilization) re-renders the moment boundaries change on the Control page.
+- **Current Evaluation Snapshot** — shows indoor / outdoor / Δ inputs, then the Decision-layer choice (level + active rule) and the Output-mapping result (fan + damper), followed by reasoning. When blocked, an explicit "Δ < minOutdoorDelta" note is shown.
 - **Data Flow** — ESP32 → Backend API → Dashboard with endpoint hints.
 
 ## 11. Settings Behavior
