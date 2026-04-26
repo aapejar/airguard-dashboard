@@ -1,7 +1,7 @@
 import { DashboardLayout } from '@/components/DashboardLayout';
 import { useDevice } from '@/context/DeviceContext';
 import { cn } from '@/lib/utils';
-import { ArrowDown, ArrowRight, Cpu, Wifi, BarChart3, Settings2, ShieldCheck, RefreshCw, Database, Monitor, Zap, Layers } from 'lucide-react';
+import { ArrowDown, ArrowRight, Cpu, Wifi, BarChart3, Settings2, ShieldCheck, RefreshCw, Database, Monitor, Zap, Layers, Info, Ban } from 'lucide-react';
 
 const flowSteps = [
   { icon: Cpu, title: 'System Initialization', desc: 'ESP32 boots, connects to WiFi, initializes sensors (MH-Z19B)' },
@@ -19,43 +19,65 @@ export default function SystemDesignPage() {
   const { thresholds, latest, getEvaluation } = useDevice();
   const { safeThreshold: safe, moderateThreshold: mod, highThreshold: high, minOutdoorDelta: dmin, hysteresis } = thresholds;
   const evalSnap = getEvaluation();
+  const delta = latest.indoorCO2 - latest.outdoorCO2;
+  const deltaOk = delta >= dmin;
+  const blocked = evalSnap.rule === 'level-blocked-outdoor-worse';
 
-  const controlRules = [
+  const controlRules: Array<{
+    id: string;
+    level: string;
+    interval: string;
+    gate: string;
+    action: string;
+    color: string;
+    dot: string;
+    note: string;
+  }> = [
     {
+      id: 'level-0-safe',
       level: 'Level 0',
-      condition: `IF indoor < ${safe} ppm`,
+      interval: `indoor < ${safe} ppm`,
+      gate: '—',
       action: 'Fan OFF · Damper 0° (Closed)',
       color: 'border-success/40 bg-success/5',
       dot: 'bg-success',
       note: 'Closed / Safe — no ventilation needed.',
     },
     {
+      id: 'level-1-light',
       level: 'Level 1',
-      condition: `ELSE IF indoor < ${mod} ppm AND (indoor − outdoor) ≥ ${dmin} ppm`,
+      interval: `${safe} ≤ indoor < ${mod} ppm`,
+      gate: `Δ ≥ ${dmin} ppm`,
       action: 'Fan OFF · Damper 30°',
       color: 'border-primary/40 bg-primary/5',
       dot: 'bg-primary',
       note: 'Light Ventilation — passive intake only.',
     },
     {
+      id: 'level-2-medium',
       level: 'Level 2',
-      condition: `ELSE IF indoor < ${high} ppm AND (indoor − outdoor) ≥ ${dmin} ppm`,
+      interval: `${mod} ≤ indoor < ${high} ppm`,
+      gate: `Δ ≥ ${dmin} ppm`,
       action: 'Fan ON · Damper 60°',
       color: 'border-warning/40 bg-warning/5',
       dot: 'bg-warning',
       note: 'Medium Ventilation — active exhaust engaged.',
     },
     {
+      id: 'level-3-aggressive',
       level: 'Level 3',
-      condition: `ELSE indoor ≥ ${high} ppm AND (indoor − outdoor) ≥ ${dmin} ppm`,
+      interval: `indoor ≥ ${high} ppm`,
+      gate: `Δ ≥ ${dmin} ppm`,
       action: 'Fan ON · Damper 90° (Full Open)',
       color: 'border-destructive/40 bg-destructive/5',
       dot: 'bg-destructive',
       note: 'Aggressive Ventilation — highest supervisory level.',
     },
     {
+      id: 'level-blocked-outdoor-worse',
       level: 'Override',
-      condition: `IF indoor ≥ ${safe} AND (indoor − outdoor) < ${dmin} ppm`,
+      interval: `indoor ≥ ${safe} ppm`,
+      gate: `Δ < ${dmin} ppm`,
       action: 'Force Level 0 (Sealed)',
       color: 'border-muted bg-muted/20',
       dot: 'bg-muted-foreground',
@@ -73,27 +95,32 @@ export default function SystemDesignPage() {
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
         {/* Software Flow */}
         <div className="panel p-6">
-          <h3 className="text-sm font-semibold text-foreground uppercase tracking-wider mb-6">Supervisory Control Flow</h3>
+          <h3 className="text-sm font-semibold text-foreground uppercase tracking-wider mb-2">Supervisory Control Flow</h3>
+          <p className="text-xs text-muted-foreground mb-4 leading-relaxed">
+            Three layered stages: <span className="text-foreground font-medium">Decision</span> (IF-ELSE rules over sensor inputs) →{' '}
+            <span className="text-foreground font-medium">Mapping</span> (level → actuator targets) →{' '}
+            <span className="text-foreground font-medium">Execution</span> (drive damper + fan).
+          </p>
           <div className="space-y-1">
             {flowSteps.map((step, i) => (
               <div key={step.title}>
-                <div className="flex items-start gap-4 p-3 rounded-lg hover:bg-muted/30 transition-colors">
+                <div className="flex items-start gap-3 p-2 rounded-lg hover:bg-muted/30 transition-colors">
                   <div className="flex flex-col items-center">
-                    <div className="p-2 rounded-md bg-primary/10 border border-primary/20">
-                      <step.icon className="h-4 w-4 text-primary" />
+                    <div className="p-1.5 rounded-md bg-primary/10 border border-primary/20">
+                      <step.icon className="h-3.5 w-3.5 text-primary" />
                     </div>
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
-                      <span className="text-xs font-mono text-muted-foreground">{String(i + 1).padStart(2, '0')}</span>
-                      <p className="text-sm font-semibold text-foreground">{step.title}</p>
+                      <span className="text-[10px] font-mono text-muted-foreground">{String(i + 1).padStart(2, '0')}</span>
+                      <p className="text-xs font-semibold text-foreground">{step.title}</p>
                     </div>
-                    <p className="text-xs text-muted-foreground mt-0.5 leading-relaxed">{step.desc}</p>
+                    <p className="text-[11px] text-muted-foreground mt-0.5 leading-snug">{step.desc}</p>
                   </div>
                 </div>
                 {i < flowSteps.length - 1 && (
-                  <div className="flex justify-start ml-[22px]">
-                    <ArrowDown className="h-4 w-4 text-border" />
+                  <div className="flex justify-start ml-[18px]">
+                    <ArrowDown className="h-3 w-3 text-border" />
                   </div>
                 )}
               </div>
@@ -104,122 +131,189 @@ export default function SystemDesignPage() {
         {/* Control Logic */}
         <div className="space-y-6">
           <div className="panel p-6">
-            <h3 className="text-sm font-semibold text-foreground uppercase tracking-wider mb-2">IF-ELSE Rule Base (Supervisory Layer)</h3>
-            <p className="text-xs text-muted-foreground mb-6 leading-relaxed">
-              The supervisor evaluates sensor inputs against a structured IF-ELSE rule base to choose a discrete <span className="font-semibold text-foreground">ventilation level (0–3)</span>. The selected level is then mapped into actuator targets (damper angle &amp; fan state) by the output mapping layer. A small stabilization band (±{hysteresis} ppm) only smooths transitions between levels.
+            <h3 className="text-sm font-semibold text-foreground uppercase tracking-wider mb-2">IF-ELSE Rule Base — Supervisory Decision Layer</h3>
+            <p className="text-xs text-muted-foreground mb-3 leading-relaxed">
+              The supervisor classifies <span className="text-foreground font-medium">indoor CO₂</span> into one of four non-overlapping intervals to select a discrete <span className="font-semibold text-foreground">ventilation level (0–3)</span>. The output mapping layer then translates the level into actuator targets. A ±{hysteresis} ppm stabilization band only smooths boundary transitions.
             </p>
 
-            <div className="space-y-3">
-              {controlRules.map((rule, i) => (
-                <div key={i} className={cn('p-4 rounded-lg border transition-colors', rule.color)}>
-                  <div className="flex items-start gap-3">
-                    <span className={cn('h-2.5 w-2.5 rounded-full mt-1 shrink-0', rule.dot)} />
-                    <div className="flex-1">
-                      <div className="flex items-center justify-between gap-2 mb-1">
-                        <span className="text-[10px] uppercase tracking-wider font-semibold text-muted-foreground">{rule.level}</span>
+            {/* Δ explanation block */}
+            <div className="rounded-md border border-border bg-muted/20 p-3 mb-4 text-[11px] leading-relaxed">
+              <div className="flex items-center gap-2 mb-1">
+                <Info className="h-3 w-3 text-primary" />
+                <span className="text-xs font-semibold text-foreground">How Δ gates ventilation</span>
+              </div>
+              <p className="text-muted-foreground">
+                <span className="font-mono text-foreground">Δ = indoor − outdoor</span>. A positive Δ means indoor air is worse than outdoor air. Ventilation above Level 0 is only authorised when{' '}
+                <span className="font-mono text-foreground">Δ ≥ {dmin} ppm</span>, i.e. outdoor air is sufficiently cleaner to actually improve indoor quality.
+              </p>
+              <p className="text-muted-foreground mt-1">
+                <span className="text-foreground font-medium">Example:</span> indoor = 950, outdoor = 420 → Δ = 530 ≥ {dmin} ✓ — supervisor selects Level 2 (Medium). If outdoor were 920, Δ = 30 &lt; {dmin} → ventilation is blocked.
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              {controlRules.map(rule => {
+                const isActive = rule.id === evalSnap.rule;
+                return (
+                  <div
+                    key={rule.id}
+                    className={cn(
+                      'p-3 rounded-md border transition-colors',
+                      rule.color,
+                      isActive && 'ring-2 ring-primary/60 shadow-md shadow-primary/10',
+                    )}
+                  >
+                    <div className="flex items-start gap-3">
+                      <span className={cn('h-2 w-2 rounded-full mt-1.5 shrink-0', rule.dot)} />
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between gap-2 mb-1">
+                          <span className="text-[10px] uppercase tracking-wider font-semibold text-muted-foreground">{rule.level}</span>
+                          {isActive && (
+                            <span className="text-[9px] uppercase tracking-wider font-bold text-primary bg-primary/10 px-1.5 py-0.5 rounded">Active</span>
+                          )}
+                        </div>
+                        <div className="grid grid-cols-[1fr_auto] gap-x-3 gap-y-0.5 items-baseline">
+                          <p className="text-xs font-mono text-foreground">{rule.interval}</p>
+                          <p className="text-[10px] font-mono text-muted-foreground whitespace-nowrap">{rule.gate}</p>
+                        </div>
+                        <p className="text-[11px] text-muted-foreground mt-1">→ {rule.action}</p>
+                        <p className="text-[11px] text-muted-foreground mt-0.5 italic">{rule.note}</p>
                       </div>
-                      <p className="text-sm font-semibold text-foreground font-mono">{rule.condition}</p>
-                      <p className="text-xs text-muted-foreground mt-1">→ {rule.action}</p>
-                      <p className="text-xs text-muted-foreground mt-0.5 italic">{rule.note}</p>
                     </div>
                   </div>
+                );
+              })}
+            </div>
+
+            {/* How decision is made / why blocked */}
+            <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3 text-[11px]">
+              <div className="rounded-md border border-border bg-muted/20 p-3">
+                <div className="flex items-center gap-1.5 mb-1">
+                  <Zap className="h-3 w-3 text-primary" />
+                  <span className="text-xs font-semibold text-foreground">How the decision is made</span>
                 </div>
-              ))}
+                <p className="text-muted-foreground leading-snug">
+                  Indoor CO₂ is matched to exactly one interval (Level 0–3). For any level &gt; 0, Δ must clear the minimum outdoor advantage; otherwise the supervisor falls back to Level 0.
+                </p>
+              </div>
+              <div className="rounded-md border border-border bg-muted/20 p-3">
+                <div className="flex items-center gap-1.5 mb-1">
+                  <Ban className="h-3 w-3 text-warning" />
+                  <span className="text-xs font-semibold text-foreground">Why ventilation may be blocked</span>
+                </div>
+                <p className="text-muted-foreground leading-snug">
+                  When <span className="font-mono text-foreground">Δ &lt; {dmin}</span>, opening the damper would draw in air that is no better — the supervisor seals the system to prevent counter-productive operation.
+                </p>
+              </div>
             </div>
           </div>
 
           {/* Threshold Summary (live) */}
           <div className="panel p-6">
-            <h3 className="text-sm font-semibold text-foreground uppercase tracking-wider mb-4">Decision Boundaries (Live)</h3>
-            <div className="grid grid-cols-3 gap-4">
-              <div className="bg-muted/30 rounded-lg p-4 text-center">
-                <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Safe</p>
-                <p className="text-2xl font-bold font-mono text-success">{safe}</p>
-                <p className="text-xs text-muted-foreground">ppm</p>
+            <h3 className="text-sm font-semibold text-foreground uppercase tracking-wider mb-3">Decision Boundaries (Live)</h3>
+            <div className="grid grid-cols-5 gap-2">
+              <div className="bg-muted/30 rounded-md p-2.5 text-center">
+                <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-0.5">Safe</p>
+                <p className="text-lg font-bold font-mono text-success leading-tight">{safe}</p>
+                <p className="text-[9px] text-muted-foreground">ppm</p>
               </div>
-              <div className="bg-muted/30 rounded-lg p-4 text-center">
-                <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Moderate</p>
-                <p className="text-2xl font-bold font-mono text-primary">{mod}</p>
-                <p className="text-xs text-muted-foreground">ppm</p>
+              <div className="bg-muted/30 rounded-md p-2.5 text-center">
+                <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-0.5">Moderate</p>
+                <p className="text-lg font-bold font-mono text-primary leading-tight">{mod}</p>
+                <p className="text-[9px] text-muted-foreground">ppm</p>
               </div>
-              <div className="bg-muted/30 rounded-lg p-4 text-center">
-                <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">High</p>
-                <p className="text-2xl font-bold font-mono text-destructive">{high}</p>
-                <p className="text-xs text-muted-foreground">ppm</p>
+              <div className="bg-muted/30 rounded-md p-2.5 text-center">
+                <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-0.5">High</p>
+                <p className="text-lg font-bold font-mono text-destructive leading-tight">{high}</p>
+                <p className="text-[9px] text-muted-foreground">ppm</p>
               </div>
-            </div>
-            <div className="grid grid-cols-2 gap-4 mt-3">
-              <div className="bg-muted/30 rounded-lg p-4 text-center">
-                <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Min outdoor Δ</p>
-                <p className="text-2xl font-bold font-mono text-warning">{dmin}</p>
-                <p className="text-xs text-muted-foreground">ppm</p>
+              <div className="bg-muted/30 rounded-md p-2.5 text-center">
+                <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-0.5">Min Δ</p>
+                <p className="text-lg font-bold font-mono text-warning leading-tight">{dmin}</p>
+                <p className="text-[9px] text-muted-foreground">ppm</p>
               </div>
-              <div className="bg-muted/30 rounded-lg p-4 text-center">
-                <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Stabilization band</p>
-                <p className="text-2xl font-bold font-mono text-muted-foreground">±{hysteresis}</p>
-                <p className="text-xs text-muted-foreground">ppm</p>
+              <div className="bg-muted/30 rounded-md p-2.5 text-center">
+                <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-0.5">Stab.</p>
+                <p className="text-lg font-bold font-mono text-muted-foreground leading-tight">±{hysteresis}</p>
+                <p className="text-[9px] text-muted-foreground">ppm</p>
               </div>
             </div>
           </div>
 
           {/* Current Evaluation Snapshot */}
           <div className="panel p-6">
-            <h3 className="text-sm font-semibold text-foreground uppercase tracking-wider mb-4 flex items-center gap-2">
+            <h3 className="text-sm font-semibold text-foreground uppercase tracking-wider mb-3 flex items-center gap-2">
               <Zap className="h-4 w-4 text-primary" />
               Current Evaluation Snapshot
             </h3>
-            <div className="space-y-3 text-sm">
-              <div className="grid grid-cols-2 gap-3">
-                <div className="bg-muted/30 rounded-md p-3">
-                  <p className="text-xs text-muted-foreground">Indoor CO₂</p>
-                  <p className="font-mono font-semibold text-foreground">{latest.indoorCO2} ppm</p>
-                </div>
-                <div className="bg-muted/30 rounded-md p-3">
-                  <p className="text-xs text-muted-foreground">Outdoor CO₂</p>
-                  <p className="font-mono font-semibold text-foreground">{latest.outdoorCO2} ppm</p>
-                </div>
+
+            {/* Inputs row */}
+            <div className="grid grid-cols-3 gap-2 mb-3">
+              <div className="bg-muted/30 rounded-md p-2 text-center">
+                <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Indoor</p>
+                <p className="font-mono text-sm font-semibold text-foreground">{latest.indoorCO2}</p>
+                <p className="text-[9px] text-muted-foreground">ppm</p>
               </div>
+              <div className="bg-muted/30 rounded-md p-2 text-center">
+                <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Outdoor</p>
+                <p className="font-mono text-sm font-semibold text-foreground">{latest.outdoorCO2}</p>
+                <p className="text-[9px] text-muted-foreground">ppm</p>
+              </div>
+              <div className={cn('rounded-md p-2 text-center', deltaOk ? 'bg-success/10' : 'bg-warning/10')}>
+                <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Δ</p>
+                <p className={cn('font-mono text-sm font-semibold', deltaOk ? 'text-success' : 'text-warning')}>
+                  {delta >= 0 ? '+' : ''}{delta.toFixed(0)}
+                </p>
+                <p className="text-[9px] text-muted-foreground">{deltaOk ? `≥ ${dmin}` : `< ${dmin}`} ppm</p>
+              </div>
+            </div>
+
+            {/* Decision → Mapping */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
               <div className="border-l-2 border-primary pl-3 py-1">
-                <p className="text-xs text-muted-foreground">Selected ventilation level</p>
+                <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Decision layer</p>
                 <p className="font-mono text-foreground font-semibold">{evalSnap.ventilationLabel}</p>
-              </div>
-              <div className="border-l-2 border-primary pl-3 py-1">
-                <p className="text-xs text-muted-foreground">Active rule</p>
-                <p className="font-mono text-foreground">{evalSnap.ruleLabel}</p>
-              </div>
-              <div className="border-l-2 border-success pl-3 py-1">
-                <p className="text-xs text-muted-foreground">Decision (reasoning)</p>
-                <p className="text-foreground">{evalSnap.decision}</p>
+                <p className="font-mono text-[10px] text-muted-foreground mt-0.5">{evalSnap.ruleLabel}</p>
               </div>
               <div className="border-l-2 border-warning pl-3 py-1">
-                <p className="text-xs text-muted-foreground">Mapped actuator targets</p>
+                <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Output mapping</p>
                 <p className="font-mono text-foreground">
-                  Fan {evalSnap.recommendation.fanStatus} · Damper {evalSnap.recommendedDamperAngle}° ({evalSnap.recommendation.damperAction})
+                  Fan {evalSnap.recommendation.fanStatus} · Damper {evalSnap.recommendedDamperAngle}°
                 </p>
+                <p className="text-[10px] text-muted-foreground mt-0.5">Action: {evalSnap.recommendation.damperAction}</p>
               </div>
-              <p className="text-xs text-muted-foreground italic">{evalSnap.notes}</p>
+            </div>
+
+            <div className="mt-3 border-l-2 border-success pl-3 py-1 text-xs">
+              <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Reasoning</p>
+              <p className="text-foreground leading-snug">{evalSnap.decision}</p>
+              {blocked && (
+                <p className="text-warning text-[11px] mt-1 italic">
+                  Blocked: outdoor air offers no advantage (Δ &lt; {dmin}).
+                </p>
+              )}
             </div>
           </div>
 
           {/* Data Flow */}
           <div className="panel p-6">
-            <h3 className="text-sm font-semibold text-foreground uppercase tracking-wider mb-4">Data Flow</h3>
+            <h3 className="text-sm font-semibold text-foreground uppercase tracking-wider mb-3">Data Flow</h3>
             <div className="flex items-center justify-between gap-2 text-xs">
-              <div className="flex-1 text-center bg-muted/30 rounded-md p-3">
-                <Cpu className="h-5 w-5 text-primary mx-auto mb-1" />
-                <p className="font-semibold text-foreground">ESP32</p>
+              <div className="flex-1 text-center bg-muted/30 rounded-md p-2.5">
+                <Cpu className="h-4 w-4 text-primary mx-auto mb-1" />
+                <p className="font-semibold text-foreground text-xs">ESP32</p>
                 <p className="text-muted-foreground text-[10px]">Sensors + supervisor</p>
               </div>
-              <ArrowRight className="h-4 w-4 text-muted-foreground shrink-0" />
-              <div className="flex-1 text-center bg-muted/30 rounded-md p-3">
-                <Database className="h-5 w-5 text-primary mx-auto mb-1" />
-                <p className="font-semibold text-foreground">Backend API</p>
+              <ArrowRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+              <div className="flex-1 text-center bg-muted/30 rounded-md p-2.5">
+                <Database className="h-4 w-4 text-primary mx-auto mb-1" />
+                <p className="font-semibold text-foreground text-xs">Backend API</p>
                 <p className="text-muted-foreground text-[10px]">Node / Express</p>
               </div>
-              <ArrowRight className="h-4 w-4 text-muted-foreground shrink-0" />
-              <div className="flex-1 text-center bg-muted/30 rounded-md p-3">
-                <Monitor className="h-5 w-5 text-primary mx-auto mb-1" />
-                <p className="font-semibold text-foreground">Dashboard</p>
+              <ArrowRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+              <div className="flex-1 text-center bg-muted/30 rounded-md p-2.5">
+                <Monitor className="h-4 w-4 text-primary mx-auto mb-1" />
+                <p className="font-semibold text-foreground text-xs">Dashboard</p>
                 <p className="text-muted-foreground text-[10px]">React SPA</p>
               </div>
             </div>
