@@ -30,9 +30,11 @@ export default function ControlPage() {
   const [applied, setApplied] = useState(false);
   const [cmdError, setCmdError] = useState<string | null>(null);
 
-  // Threshold form state
-  const [warn, setWarn] = useState(thresholds.warningThreshold);
-  const [crit, setCrit] = useState(thresholds.criticalThreshold);
+  // Decision-boundary form state (supervisory IF-ELSE control)
+  const [safe, setSafe] = useState(thresholds.safeThreshold);
+  const [moderate, setModerate] = useState(thresholds.moderateThreshold);
+  const [high, setHigh] = useState(thresholds.highThreshold);
+  const [delta, setDelta] = useState(thresholds.minOutdoorDelta);
   const [hyst, setHyst] = useState(thresholds.hysteresis);
   const [thrSaved, setThrSaved] = useState(false);
   const [thrError, setThrError] = useState<string | null>(null);
@@ -51,11 +53,22 @@ export default function ControlPage() {
 
   const handleSaveThresholds = () => {
     setThrError(null);
-    if (warn < 200 || warn > 5000) return setThrError('Warning must be between 200 and 5000 ppm');
-    if (crit < 400 || crit > 5000) return setThrError('Critical must be between 400 and 5000 ppm');
-    if (warn >= crit) return setThrError('Warning must be less than critical');
-    if (hyst < 0 || hyst > 500) return setThrError('Hysteresis must be 0–500 ppm');
-    updateThresholds({ warningThreshold: warn, criticalThreshold: crit, hysteresis: hyst }, user?.username);
+    if (safe < 300 || safe > 5000) return setThrError('Safe boundary must be between 300 and 5000 ppm');
+    if (moderate < 400 || moderate > 5000) return setThrError('Moderate boundary must be between 400 and 5000 ppm');
+    if (high < 500 || high > 5000) return setThrError('High boundary must be between 500 and 5000 ppm');
+    if (!(safe < moderate && moderate < high)) return setThrError('Boundaries must satisfy safe < moderate < high');
+    if (delta < 0 || delta > 1000) return setThrError('Min outdoor Δ must be 0–1000 ppm');
+    if (hyst < 0 || hyst > 500) return setThrError('Stabilization band must be 0–500 ppm');
+    updateThresholds(
+      {
+        safeThreshold: safe,
+        moderateThreshold: moderate,
+        highThreshold: high,
+        minOutdoorDelta: delta,
+        hysteresis: hyst,
+      },
+      user?.username,
+    );
     setThrSaved(true);
     setTimeout(() => setThrSaved(false), 3000);
   };
@@ -101,39 +114,63 @@ export default function ControlPage() {
           </div>
         </div>
 
-        {/* CO₂ Threshold Configuration */}
+        {/* Supervisory Decision Boundaries (IF-ELSE rule layer) */}
         <div className="panel p-5 space-y-4">
           <div className="flex items-center gap-2 mb-1">
             <SlidersHorizontal className="h-4 w-4 text-primary" />
-            <h3 className="text-xs text-muted-foreground uppercase tracking-wider font-semibold">CO₂ Control Thresholds</h3>
+            <h3 className="text-xs text-muted-foreground uppercase tracking-wider font-semibold">Supervisory Decision Boundaries</h3>
           </div>
           <p className="text-xs text-muted-foreground">
-            Defines hysteresis-based on/off control logic. Updated values apply immediately and are reflected on the System Design page.
+            These values configure the IF-ELSE supervisory layer that selects a ventilation level (0–3) before any actuator action. Updates apply immediately and are mirrored on the System Design page.
           </p>
 
           <div className="grid grid-cols-3 gap-3">
             <div>
-              <label className="block text-xs text-muted-foreground mb-1.5">Warning (ppm)</label>
+              <label className="block text-xs text-muted-foreground mb-1.5">Safe ≤ (ppm)</label>
               <input
                 type="number"
-                value={warn}
-                onChange={e => setWarn(Number(e.target.value))}
+                value={safe}
+                onChange={e => setSafe(Number(e.target.value))}
                 disabled={!canConfigureThresholds}
                 className="w-full px-3 py-2.5 bg-muted border border-border rounded-md text-sm text-foreground font-mono focus:outline-none focus:ring-1 focus:ring-primary transition-colors disabled:opacity-50"
               />
             </div>
             <div>
-              <label className="block text-xs text-muted-foreground mb-1.5">Critical (ppm)</label>
+              <label className="block text-xs text-muted-foreground mb-1.5">Moderate ≤ (ppm)</label>
               <input
                 type="number"
-                value={crit}
-                onChange={e => setCrit(Number(e.target.value))}
+                value={moderate}
+                onChange={e => setModerate(Number(e.target.value))}
                 disabled={!canConfigureThresholds}
                 className="w-full px-3 py-2.5 bg-muted border border-border rounded-md text-sm text-foreground font-mono focus:outline-none focus:ring-1 focus:ring-primary transition-colors disabled:opacity-50"
               />
             </div>
             <div>
-              <label className="block text-xs text-muted-foreground mb-1.5">Hysteresis (ppm)</label>
+              <label className="block text-xs text-muted-foreground mb-1.5">High ≤ (ppm)</label>
+              <input
+                type="number"
+                value={high}
+                onChange={e => setHigh(Number(e.target.value))}
+                disabled={!canConfigureThresholds}
+                className="w-full px-3 py-2.5 bg-muted border border-border rounded-md text-sm text-foreground font-mono focus:outline-none focus:ring-1 focus:ring-primary transition-colors disabled:opacity-50"
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs text-muted-foreground mb-1.5">Min outdoor Δ (ppm)</label>
+              <input
+                type="number"
+                value={delta}
+                onChange={e => setDelta(Number(e.target.value))}
+                disabled={!canConfigureThresholds}
+                className="w-full px-3 py-2.5 bg-muted border border-border rounded-md text-sm text-foreground font-mono focus:outline-none focus:ring-1 focus:ring-primary transition-colors disabled:opacity-50"
+              />
+              <p className="text-[10px] text-muted-foreground mt-1">Required (indoor − outdoor) to authorise ventilation.</p>
+            </div>
+            <div>
+              <label className="block text-xs text-muted-foreground mb-1.5">Stabilization band ± (ppm)</label>
               <input
                 type="number"
                 value={hyst}
@@ -141,6 +178,7 @@ export default function ControlPage() {
                 disabled={!canConfigureThresholds}
                 className="w-full px-3 py-2.5 bg-muted border border-border rounded-md text-sm text-foreground font-mono focus:outline-none focus:ring-1 focus:ring-primary transition-colors disabled:opacity-50"
               />
+              <p className="text-[10px] text-muted-foreground mt-1">Smooths transitions between levels (supporting role only).</p>
             </div>
           </div>
 
@@ -155,13 +193,13 @@ export default function ControlPage() {
             disabled={!canConfigureThresholds}
             className="w-full py-2.5 bg-primary text-primary-foreground rounded-md text-sm font-semibold hover:opacity-90 disabled:opacity-50 transition-opacity"
           >
-            Save Thresholds
+            Save Decision Boundaries
           </button>
           <button
             type="button"
             onClick={() => {
               resetThresholds(user?.username);
-              setWarn(900); setCrit(1000); setHyst(100);
+              setSafe(700); setModerate(900); setHigh(1100); setDelta(50); setHyst(50);
               setThrSaved(true);
               setTimeout(() => setThrSaved(false), 3000);
             }}
@@ -169,12 +207,12 @@ export default function ControlPage() {
             className="w-full py-2 text-xs text-muted-foreground hover:text-foreground transition-colors flex items-center justify-center gap-1.5 disabled:opacity-40"
           >
             <RotateCcw className="h-3 w-3" />
-            Restore default thresholds
+            Restore default boundaries
           </button>
           {thrSaved && (
             <div className="flex items-center gap-2 text-sm text-success">
               <CheckCircle className="h-4 w-4" />
-              Thresholds saved
+              Decision boundaries saved
             </div>
           )}
         </div>
