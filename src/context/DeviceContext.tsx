@@ -7,12 +7,25 @@ import { generateHistoricalReadings, mockAlerts } from '@/data/mockData';
 // ── Types ────────────────────────────────────────────────
 
 export interface ControlThresholds {
-  /** Lower threshold (ppm). Below → fan OFF */
-  warningThreshold: number;
-  /** Upper threshold (ppm). Above → fan ON */
-  criticalThreshold: number;
-  /** Hysteresis dead-band (ppm) */
+  // ── Decision boundaries used by the IF-ELSE supervisory layer ──
+  /** Upper bound of "safe" indoor CO₂ (ppm). Below this → Level 0 (Closed / Safe). */
+  safeThreshold: number;
+  /** Upper bound of "moderate" indoor CO₂ (ppm). Below this → Level 1 (Light Ventilation). */
+  moderateThreshold: number;
+  /** Upper bound of "high" indoor CO₂ (ppm). Below this → Level 2 (Medium Ventilation). Above → Level 3 (Aggressive). */
+  highThreshold: number;
+  /** Minimum outdoor advantage (indoor − outdoor, ppm) required to authorise ventilation. */
+  minOutdoorDelta: number;
+  /**
+   * Stabilization band (ppm). Used as a transition smoothing margin around each
+   * boundary to avoid rapid level switching. NOT the primary control method.
+   */
   hysteresis: number;
+  // ── Legacy aliases (deprecated, kept for backwards compatibility with persisted state) ──
+  /** @deprecated Use `moderateThreshold`. */
+  warningThreshold?: number;
+  /** @deprecated Use `highThreshold`. */
+  criticalThreshold?: number;
 }
 
 interface DeviceState {
@@ -66,9 +79,11 @@ const MAX_CYCLES = 5;
 const MAX_COMMAND_HISTORY = 25;
 
 export const DEFAULT_THRESHOLDS: ControlThresholds = {
-  warningThreshold: 900,
-  criticalThreshold: 1000,
-  hysteresis: 100,
+  safeThreshold: 700,
+  moderateThreshold: 900,
+  highThreshold: 1100,
+  minOutdoorDelta: 50,
+  hysteresis: 50,
 };
 
 const defaultThresholds = DEFAULT_THRESHOLDS;
@@ -76,7 +91,20 @@ const defaultThresholds = DEFAULT_THRESHOLDS;
 function loadThresholds(): ControlThresholds {
   try {
     const raw = localStorage.getItem(THRESHOLDS_KEY);
-    if (raw) return { ...defaultThresholds, ...JSON.parse(raw) };
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      // Migrate legacy schema (warningThreshold / criticalThreshold) → new boundaries.
+      const migrated: ControlThresholds = {
+        ...defaultThresholds,
+        ...parsed,
+        safeThreshold: parsed.safeThreshold ?? Math.max(400, (parsed.warningThreshold ?? defaultThresholds.moderateThreshold) - 200),
+        moderateThreshold: parsed.moderateThreshold ?? parsed.warningThreshold ?? defaultThresholds.moderateThreshold,
+        highThreshold: parsed.highThreshold ?? parsed.criticalThreshold ?? defaultThresholds.highThreshold,
+        minOutdoorDelta: parsed.minOutdoorDelta ?? defaultThresholds.minOutdoorDelta,
+        hysteresis: parsed.hysteresis ?? defaultThresholds.hysteresis,
+      };
+      return migrated;
+    }
   } catch { /* ignore */ }
   return defaultThresholds;
 }
