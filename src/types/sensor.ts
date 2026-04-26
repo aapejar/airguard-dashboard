@@ -69,13 +69,21 @@ export interface CommandRecord {
 
 export interface EvaluationSnapshot {
   rule:
-    | 'below-warning'
-    | 'dead-band'
-    | 'above-critical-outdoor-cleaner'
-    | 'above-critical-outdoor-worse';
+    | 'level-0-safe'
+    | 'level-1-light'
+    | 'level-2-medium'
+    | 'level-3-aggressive'
+    | 'level-blocked-outdoor-worse'
+    | 'transition-stabilizing';
+  /** Supervisory ventilation level selected by the IF-ELSE decision layer */
+  ventilationLevel: 0 | 1 | 2 | 3;
+  /** Human label for the ventilation level (e.g., "Closed / Safe", "Light", "Medium", "Aggressive") */
+  ventilationLabel: string;
   ruleLabel: string;
   decision: string;
   recommendation: { fanStatus: 'ON' | 'OFF'; damperAction: 'OPEN' | 'CLOSE' | 'HOLD' };
+  /** Recommended damper angle (degrees) mapped from the ventilation level */
+  recommendedDamperAngle: number;
   notes: string;
 }
 

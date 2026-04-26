@@ -56,7 +56,7 @@ Indoor CO₂ buildup degrades cognitive performance and air quality. A simple cl
 
 **Project goals:**
 1. Provide a production-grade frontend that visualizes ESP32 telemetry.
-2. Implement on-off control with hysteresis dead-band.
+2. Implement an **IF-ELSE rule-based supervisory control** layer that selects a discrete ventilation level (0–3) before any actuator action, with hysteresis only as a transition-stabilization helper.
 3. Deliver role-based UI with admin / operator / user separation.
 4. Add a secure authentication layer with admin 2FA.
 5. Keep all design choices documented in-app on the System Design page.
@@ -66,9 +66,9 @@ Indoor CO₂ buildup degrades cognitive performance and air quality. A simple cl
 - 🔐 **Authentication** — username/password + admin 2FA, brute-force lockout, inactivity auto-logout, session persistence
 - 👥 **User management** — admin CRUD, role assignment, account enable/disable, 2FA toggle, password reset
 - 📊 **Dashboard** — live sensor cards, CO₂ trend chart, system status, runtime snapshot, system alerts, ready-state indicator
-- 🎛️ **Control console** — AUTO/MANUAL mode, manual fan + damper control, threshold editor with hysteresis, command history, restore defaults
+- 🎛️ **Control console** — AUTO/MANUAL mode, manual fan + damper control, supervisory **decision-boundary editor** (safe / moderate / high / Δ-min / stabilization band), command history, restore defaults
 - 📝 **Data logs** — seeded history + filters (status / mode / time range / search), pagination, expanded columns
-- 📐 **System design** — software flowchart, control logic rules, live threshold display, current evaluation snapshot, data flow panel
+- 📐 **System design** — supervisory control flow, IF-ELSE rule base (Levels 0–3), live decision boundaries, current evaluation snapshot, data-flow panel
 - 📋 **Audit log** — admin-only activity trail (auth, control, settings, user mgmt) with filters and CSV export
 - ⚙️ **Settings** — sectioned configuration: device / connectivity / security / notifications / system behavior, with save & reset
 - 🔄 **Hybrid data** — seeded simulation that pauses after N cycles into a "ready state" awaiting real data
@@ -86,7 +86,7 @@ Indoor CO₂ buildup degrades cognitive performance and air quality. A simple cl
 - All roles. Hero card for indoor CO₂ + secondary cards (outdoor, fan, damper, ventilation, mode).
 - **Connection state banner** when device is offline — clearly notes that values shown are the *last known reading*.
 - **System ready** banner when seeded simulation has completed (after `MAX_CYCLES`), with a Resume Simulation button.
-- Right column: System Status, **Runtime Snapshot** (active rule, decision, thresholds, heartbeat age), System Alerts.
+- Right column: System Status, **Runtime Snapshot** (selected ventilation level, active rule, decision, recommended actuator output, decision boundaries, heartbeat age), System Alerts.
 
 ### `/logs` Data Logs (`DataLogsPage.tsx`)
 - All roles. Paginated `LogsTable` with search and three filters: time range, CO₂ status, control mode.
@@ -96,7 +96,7 @@ Indoor CO₂ buildup degrades cognitive performance and air quality. A simple cl
 
 ### `/control` Control (`ControlPage.tsx`)
 - Admin / operator only. Active command status panel showing currently confirmed device state.
-- **Threshold editor** — Warning, Critical, Hysteresis (ppm) with validation rules and *Restore default thresholds* button. Updates apply live and re-render the System Design page.
+- **Decision-boundary editor** — `safeThreshold`, `moderateThreshold`, `highThreshold`, `minOutdoorDelta`, and `hysteresis` (stabilization band) with validation rules and a *Restore default boundaries* button. Updates apply live and re-render the System Design page.
 - Mode toggle — AUTO vs MANUAL.
 - **Manual controls** (when MANUAL) — fan switch, damper slider (0°/45°/90°), Apply with confirm dialog, success/error feedback.
 - **Recent Commands panel** — shows the last 6 commands with timestamp, actor, and result badge (`pending` / `success` / `failed`).
@@ -104,8 +104,8 @@ Indoor CO₂ buildup degrades cognitive performance and air quality. A simple cl
 ### `/design` System Design (`SystemDesignPage.tsx`)
 - All roles. Documents:
   - Software flowchart (init → read → validate → process → decide → push → loop)
-  - On-off control logic (4 hysteresis-based rules)
-  - Live threshold parameters
+  - IF-ELSE supervisory rule base (Levels 0–3 + outdoor-not-advantageous override)
+  - Live decision boundaries (safe / moderate / high / min outdoor Δ / stabilization band)
   - **Current Evaluation Snapshot** — interprets the latest reading against the active rule and shows the recommended action
   - **Data Flow** — ESP32 → Backend → Dashboard panel
 
@@ -160,7 +160,7 @@ All auth events (success, failure, 2FA challenge, 2FA failure, inactivity logout
 - **Sensor cards** — show the latest validated reading. Indoor CO₂ status (`normal` / `warning` / `critical`) is computed from live thresholds.
 - **CO₂ Trend chart** — Recharts line chart of indoor + outdoor over the in-memory history window.
 - **System Status** — device online/offline (driven entirely by heartbeat age), last update, signal strength, uptime, firmware version.
-- **Runtime Snapshot** — active rule, decision string, thresholds, hysteresis, heartbeat age, last reading timestamp.
+- **Runtime Snapshot** — selected ventilation level, active rule, decision string, recommended actuator output, decision boundaries, min outdoor Δ, heartbeat age, last reading timestamp.
 - **Alerts panel** — only system events: threshold breaches, disconnects, reconnects, faults, ready-state notification. Manually clearable.
 - **Offline banner** — surfaces when heartbeat exceeds `config.heartbeatTimeout`, explicitly tells the user that displayed values are the last known reading.
 - **Ready-state banner** — after `MAX_CYCLES` polling cycles, the simulation pauses; user can resume for demo purposes.
@@ -169,29 +169,58 @@ All auth events (success, failure, 2FA challenge, 2FA failure, inactivity logout
 
 - Initial seed: 50 historical readings via `generateHistoricalReadings`.
 - Each appended reading is **deduplicated** by `id` and capped to `config.maxHistorySize` entries.
-- Filters: time range (1h / 24h / 7d / all), CO₂ status (normal / warning / critical), mode (AUTO / MANUAL), free-text search.
+- Filters: time range (1h / 24h / 7d / all), CO₂ status (normal / warning / critical, derived from current decision boundaries), mode (AUTO / MANUAL), free-text search.
 - Pagination at 15 rows per page. Empty-state messaging guides the user.
 - Admin clear-all button is destructive and confirmed via dialog.
 - Table columns are designed to map 1:1 onto a future CSV/JSON export.
 
 ## 9. Control Behavior
 
-- **AUTO** — backend / firmware regulates the fan and damper according to the threshold rules.
+- **AUTO** — backend / firmware delegates to the on-device **IF-ELSE supervisory layer**: sensors are evaluated, a ventilation level (0–3) is selected from the rule base, and the chosen level is mapped to actuator targets. Hysteresis only smooths transitions between adjacent levels.
 - **MANUAL** — operator overrides take effect on the device after a confirmed `POST /api/devices/:id/control`.
-- **Threshold editor** — Warning, Critical, Hysteresis (ppm). Validation:
-  - Warning: 200–5000
-  - Critical: 400–5000 and `> warning`
-  - Hysteresis: 0–500
-  - Restore-default button resets to (900 / 1000 / 100).
+- **Decision-boundary editor** (supervisory IF-ELSE layer). Validation:
+  - `safeThreshold` 300–5000 ppm
+  - `moderateThreshold` 400–5000 ppm and `> safe`
+  - `highThreshold` 500–5000 ppm and `> moderate`
+  - `minOutdoorDelta` 0–1000 ppm — minimum (indoor − outdoor) required to authorise ventilation
+  - `hysteresis` 0–500 ppm — stabilization band, **not** the primary control method
+  - Restore-default button resets to (safe=700, moderate=900, high=1100, Δmin=50, stab=±50).
 - **Command lifecycle** — every `sendCommand` is recorded as a `CommandRecord` in `commandHistory` (`pending → success | failed`). UI button shows `Applying…` while in flight. A command lock prevents concurrent submissions.
 - **Audit attribution** — every command logs the actor (username) and is visible on the Audit Log page.
+
+### 9.1 Control Methodology — IF-ELSE Supervisory Control
+
+The system is **not** a low-level threshold-to-actuator on/off controller. It is structured as a layered supervisory control architecture, suitable for academic/mechatronics review:
+
+1. **Input layer** — sampled values: `indoorCO2`, `outdoorCO2`, `Δ = indoorCO2 − outdoorCO2`, current `controlMode`.
+2. **Decision layer (IF-ELSE rule base)** — selects a discrete **ventilation level**:
+
+   | Level | Label                  | Condition                                                                                       |
+   |-------|------------------------|-------------------------------------------------------------------------------------------------|
+   | 0     | Closed / Safe          | `IF indoor < safeThreshold`                                                                     |
+   | 0\*   | Blocked (override)     | `IF indoor ≥ safeThreshold AND Δ < minOutdoorDelta` — outdoor not advantageous                  |
+   | 1     | Light Ventilation      | `ELSE IF indoor < moderateThreshold AND Δ ≥ minOutdoorDelta`                                    |
+   | 2     | Medium Ventilation     | `ELSE IF indoor < highThreshold AND Δ ≥ minOutdoorDelta`                                        |
+   | 3     | Aggressive Ventilation | `ELSE indoor ≥ highThreshold AND Δ ≥ minOutdoorDelta`                                           |
+
+3. **Output mapping layer** — the chosen level is translated into actuator targets:
+
+   | Level | Damper angle | Fan |
+   |-------|--------------|-----|
+   | 0     | 0° (closed)  | OFF |
+   | 1     | 30°          | OFF |
+   | 2     | 60°          | ON  |
+   | 3     | 90° (open)   | ON  |
+
+4. **Execution layer** — actuators (relay + servo) drive to the mapped targets. MANUAL mode bypasses the decision layer and applies operator targets directly.
+5. **Stabilization** — `hysteresis` is a small ±band used only to smooth transitions between adjacent levels and avoid rapid switching. It is a supporting mechanism, not the primary control method.
 
 ## 10. System Design Behavior
 
 The page intentionally mirrors the firmware's control loop so the team and reviewers can compare implementation to documentation:
 - **Software Flow** — 7 numbered steps from boot to loop.
-- **On-Off Control Logic** — 4 rules driven by live thresholds.
-- **Threshold Parameters (Live)** — re-renders the moment thresholds change on the Control page.
+- **IF-ELSE Rule Base (Supervisory Layer)** — Levels 0–3 plus an "outdoor not advantageous" override, all driven by live decision boundaries.
+- **Decision Boundaries (Live)** — re-renders the moment boundaries change on the Control page.
 - **Current Evaluation Snapshot** — applies the live rules to the most recent reading. Shows active rule, decision, recommended action, explanatory note.
 - **Data Flow** — ESP32 → Backend API → Dashboard with endpoint hints.
 
@@ -205,7 +234,7 @@ Sections, all admin-gated:
 - **System Behavior** — heartbeat monitoring, auto-recovery (beta).
 - Save validates and persists; Reset reverts to defaults.
 
-CO₂ thresholds intentionally live on the **Control** page — never duplicated here.
+The supervisory decision boundaries intentionally live on the **Control** page — never duplicated here.
 
 ## 12. User Management Behavior
 
@@ -291,7 +320,7 @@ SensorReading      { id, deviceId, indoorCO2, outdoorCO2, fanStatus, damperAngle
 SystemStatus       { deviceOnline, lastHeartbeat, uptime, firmwareVersion, wifiSignal }
 ControlCommand     { controlMode, fanStatus, damperAngle }
 CommandRecord      { id, timestamp, actor?, command, result, error? }
-EvaluationSnapshot { rule, ruleLabel, decision, recommendation, notes }
+EvaluationSnapshot { rule, ventilationLevel, ventilationLabel, ruleLabel, decision, recommendation, recommendedDamperAngle, notes }
 User               { id, username, role, status?, lastLogin?, twoFactorEnabled?, createdAt? }
 ```
 
@@ -302,7 +331,7 @@ Recommended firmware loop:
 1. Connect to WiFi → POST `/api/device/heartbeat` (uptime, signal, firmware).
 2. Read MH-Z19B every `refreshInterval` seconds.
 3. Validate range (0–5000 ppm).
-4. Apply local on-off control with hysteresis (same rules documented in the System Design page).
+4. Run the **IF-ELSE supervisory layer**: classify indoor CO₂ into Level 0–3, gate any non-zero level by `(indoor − outdoor) ≥ minOutdoorDelta`, then map the selected level to actuator targets (damper angle + fan state). Hysteresis only smooths level transitions. The same rule base is documented on the System Design page.
 5. POST `/api/device/readings` with the new sample + current actuator state.
 6. GET `/api/device/:id/command` — if a manual override is pending, apply it.
 7. Loop.

@@ -12,8 +12,8 @@ export default function DashboardPage() {
   const offline = !status.deviceOnline;
 
   const getCO2Status = (val: number): 'normal' | 'warning' | 'critical' => {
-    if (val >= thresholds.criticalThreshold) return 'critical';
-    if (val >= thresholds.warningThreshold) return 'warning';
+    if (val >= thresholds.highThreshold) return 'critical';
+    if (val >= thresholds.moderateThreshold) return 'warning';
     return 'normal';
   };
 

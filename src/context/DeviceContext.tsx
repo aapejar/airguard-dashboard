@@ -7,12 +7,25 @@ import { generateHistoricalReadings, mockAlerts } from '@/data/mockData';
 // ── Types ────────────────────────────────────────────────
 
 export interface ControlThresholds {
-  /** Lower threshold (ppm). Below → fan OFF */
-  warningThreshold: number;
-  /** Upper threshold (ppm). Above → fan ON */
-  criticalThreshold: number;
-  /** Hysteresis dead-band (ppm) */
+  // ── Decision boundaries used by the IF-ELSE supervisory layer ──
+  /** Upper bound of "safe" indoor CO₂ (ppm). Below this → Level 0 (Closed / Safe). */
+  safeThreshold: number;
+  /** Upper bound of "moderate" indoor CO₂ (ppm). Below this → Level 1 (Light Ventilation). */
+  moderateThreshold: number;
+  /** Upper bound of "high" indoor CO₂ (ppm). Below this → Level 2 (Medium Ventilation). Above → Level 3 (Aggressive). */
+  highThreshold: number;
+  /** Minimum outdoor advantage (indoor − outdoor, ppm) required to authorise ventilation. */
+  minOutdoorDelta: number;
+  /**
+   * Stabilization band (ppm). Used as a transition smoothing margin around each
+   * boundary to avoid rapid level switching. NOT the primary control method.
+   */
   hysteresis: number;
+  // ── Legacy aliases (deprecated, kept for backwards compatibility with persisted state) ──
+  /** @deprecated Use `moderateThreshold`. */
+  warningThreshold?: number;
+  /** @deprecated Use `highThreshold`. */
+  criticalThreshold?: number;
 }
 
 interface DeviceState {
@@ -66,9 +79,11 @@ const MAX_CYCLES = 5;
 const MAX_COMMAND_HISTORY = 25;
 
 export const DEFAULT_THRESHOLDS: ControlThresholds = {
-  warningThreshold: 900,
-  criticalThreshold: 1000,
-  hysteresis: 100,
+  safeThreshold: 700,
+  moderateThreshold: 900,
+  highThreshold: 1100,
+  minOutdoorDelta: 50,
+  hysteresis: 50,
 };
 
 const defaultThresholds = DEFAULT_THRESHOLDS;
@@ -76,7 +91,20 @@ const defaultThresholds = DEFAULT_THRESHOLDS;
 function loadThresholds(): ControlThresholds {
   try {
     const raw = localStorage.getItem(THRESHOLDS_KEY);
-    if (raw) return { ...defaultThresholds, ...JSON.parse(raw) };
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      // Migrate legacy schema (warningThreshold / criticalThreshold) → new boundaries.
+      const migrated: ControlThresholds = {
+        ...defaultThresholds,
+        ...parsed,
+        safeThreshold: parsed.safeThreshold ?? Math.max(400, (parsed.warningThreshold ?? defaultThresholds.moderateThreshold) - 200),
+        moderateThreshold: parsed.moderateThreshold ?? parsed.warningThreshold ?? defaultThresholds.moderateThreshold,
+        highThreshold: parsed.highThreshold ?? parsed.criticalThreshold ?? defaultThresholds.highThreshold,
+        minOutdoorDelta: parsed.minOutdoorDelta ?? defaultThresholds.minOutdoorDelta,
+        hysteresis: parsed.hysteresis ?? defaultThresholds.hysteresis,
+      };
+      return migrated;
+    }
   } catch { /* ignore */ }
   return defaultThresholds;
 }
@@ -331,7 +359,7 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
     setThresholds(DEFAULT_THRESHOLDS);
     logEvent(
       'info',
-      `Thresholds reset to defaults (warn=${DEFAULT_THRESHOLDS.warningThreshold}, crit=${DEFAULT_THRESHOLDS.criticalThreshold}, hyst=${DEFAULT_THRESHOLDS.hysteresis})`,
+      `Decision boundaries reset to defaults (safe=${DEFAULT_THRESHOLDS.safeThreshold}, moderate=${DEFAULT_THRESHOLDS.moderateThreshold}, high=${DEFAULT_THRESHOLDS.highThreshold}, ΔO=${DEFAULT_THRESHOLDS.minOutdoorDelta}, stab=±${DEFAULT_THRESHOLDS.hysteresis})`,
       { source: 'user', actor },
     );
   }, [logEvent]);
@@ -339,40 +367,80 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
   const getEvaluation = useCallback((): EvaluationSnapshot => {
     const indoor = latest.indoorCO2;
     const outdoor = latest.outdoorCO2;
-    const { warningThreshold: warn, criticalThreshold: crit } = thresholds;
-    if (indoor < warn) {
+    const { safeThreshold, moderateThreshold, highThreshold, minOutdoorDelta, hysteresis } = thresholds;
+    const delta = indoor - outdoor;
+
+    // ── Supervisory IF-ELSE decision layer ─────────────────────────
+    // Step 1: classify indoor CO₂ into a ventilation level.
+    // Step 2: gate any ventilation > Level 0 by outdoor advantage (delta ≥ minOutdoorDelta).
+    // Step 3: map the selected level to actuator targets.
+
+    // RULE 0 — Safe / Closed
+    if (indoor < safeThreshold) {
       return {
-        rule: 'below-warning',
-        ruleLabel: `Indoor CO₂ < ${warn} ppm`,
-        decision: 'Air quality acceptable — no ventilation needed',
+        rule: 'level-0-safe',
+        ventilationLevel: 0,
+        ventilationLabel: 'Level 0 — Closed / Safe',
+        ruleLabel: `IF indoor < ${safeThreshold} ppm`,
+        decision: 'Air quality is acceptable — no ventilation required',
         recommendation: { fanStatus: 'OFF', damperAction: 'CLOSE' },
-        notes: 'System idle. Fan off, damper closed.',
+        recommendedDamperAngle: 0,
+        notes: 'Supervisory layer selects Level 0. Actuators held in idle state.',
       };
     }
-    if (indoor <= crit) {
+
+    // Outdoor air is not advantageous → block active ventilation regardless of indoor level.
+    if (indoor >= safeThreshold && delta < minOutdoorDelta) {
       return {
-        rule: 'dead-band',
-        ruleLabel: `${warn} ≤ Indoor CO₂ ≤ ${crit} ppm`,
-        decision: 'Inside hysteresis dead-band — hold previous state',
-        recommendation: { fanStatus: latest.fanStatus, damperAction: 'HOLD' },
-        notes: `Dead-band ±${thresholds.hysteresis} ppm prevents oscillation.`,
+        rule: 'level-blocked-outdoor-worse',
+        ventilationLevel: 0,
+        ventilationLabel: 'Level 0 — Blocked (Outdoor Not Advantageous)',
+        ruleLabel: `IF indoor ≥ ${safeThreshold} AND (indoor − outdoor) < ${minOutdoorDelta} ppm`,
+        decision: 'Suppress ventilation — outdoor air offers no improvement',
+        recommendation: { fanStatus: 'OFF', damperAction: 'CLOSE' },
+        recommendedDamperAngle: 0,
+        notes: 'Supervisor overrides higher levels: opening the damper would not reduce indoor CO₂.',
       };
     }
-    if (outdoor < indoor) {
+
+    // RULE 1 — Light Ventilation
+    if (indoor < moderateThreshold) {
       return {
-        rule: 'above-critical-outdoor-cleaner',
-        ruleLabel: `Indoor > ${crit} ppm AND Outdoor < Indoor`,
-        decision: 'Ventilate — outdoor air is cleaner',
+        rule: 'level-1-light',
+        ventilationLevel: 1,
+        ventilationLabel: 'Level 1 — Light Ventilation',
+        ruleLabel: `ELSE IF indoor < ${moderateThreshold} ppm AND Δ ≥ ${minOutdoorDelta} ppm`,
+        decision: 'Mild buildup detected — apply light ventilation',
+        recommendation: { fanStatus: 'OFF', damperAction: 'OPEN' },
+        recommendedDamperAngle: 30,
+        notes: 'Passive intake via damper; fan held off to minimise energy use.',
+      };
+    }
+
+    // RULE 2 — Medium Ventilation
+    if (indoor < highThreshold) {
+      return {
+        rule: 'level-2-medium',
+        ventilationLevel: 2,
+        ventilationLabel: 'Level 2 — Medium Ventilation',
+        ruleLabel: `ELSE IF indoor < ${highThreshold} ppm AND Δ ≥ ${minOutdoorDelta} ppm`,
+        decision: 'Elevated CO₂ — engage active ventilation',
         recommendation: { fanStatus: 'ON', damperAction: 'OPEN' },
-        notes: 'Pull cleaner outdoor air to reduce indoor CO₂.',
+        recommendedDamperAngle: 60,
+        notes: 'Fan ON, damper at 60°. Stabilization band ±' + hysteresis + ' ppm smooths transitions to/from this level.',
       };
     }
+
+    // RULE 3 — Aggressive Ventilation
     return {
-      rule: 'above-critical-outdoor-worse',
-      ruleLabel: `Indoor > ${crit} ppm AND Outdoor ≥ Indoor`,
-      decision: 'Keep sealed — outdoor air is worse',
-      recommendation: { fanStatus: 'OFF', damperAction: 'CLOSE' },
-      notes: 'Protect indoor environment until outdoor improves.',
+      rule: 'level-3-aggressive',
+      ventilationLevel: 3,
+      ventilationLabel: 'Level 3 — Aggressive Ventilation',
+      ruleLabel: `ELSE indoor ≥ ${highThreshold} ppm AND Δ ≥ ${minOutdoorDelta} ppm`,
+      decision: 'Critical CO₂ — maximise ventilation',
+      recommendation: { fanStatus: 'ON', damperAction: 'OPEN' },
+      recommendedDamperAngle: 90,
+      notes: 'Highest supervisory level: damper fully open, fan running at full duty.',
     };
   }, [latest, thresholds]);
 
@@ -382,7 +450,7 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
         const next = { ...prev, ...t };
         logEvent(
           'info',
-          `Thresholds updated: warn=${next.warningThreshold}ppm, crit=${next.criticalThreshold}ppm, hyst=${next.hysteresis}ppm`,
+          `Decision boundaries updated: safe=${next.safeThreshold}, moderate=${next.moderateThreshold}, high=${next.highThreshold}, ΔO=${next.minOutdoorDelta}, stab=±${next.hysteresis} ppm`,
           { source: 'user', actor },
         );
         return next;

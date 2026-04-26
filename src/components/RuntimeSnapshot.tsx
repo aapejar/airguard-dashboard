@@ -1,5 +1,5 @@
 import { useDevice } from '@/context/DeviceContext';
-import { Activity, Wind, Gauge, Zap } from 'lucide-react';
+import { Activity, Wind, Gauge, Zap, Layers } from 'lucide-react';
 
 function formatAge(ms: number): string {
   if (ms < 1000) return `${ms}ms`;
@@ -19,22 +19,32 @@ export function RuntimeSnapshot() {
       </h3>
       <div className="space-y-3 text-xs">
         <div className="flex items-center justify-between">
+          <span className="text-muted-foreground flex items-center gap-2"><Layers className="h-3 w-3" /> Ventilation level</span>
+          <span className="font-mono text-primary text-right max-w-[60%] truncate" title={evalSnap.ventilationLabel}>{evalSnap.ventilationLabel}</span>
+        </div>
+        <div className="flex items-center justify-between">
           <span className="text-muted-foreground flex items-center gap-2"><Wind className="h-3 w-3" /> Active rule</span>
           <span className="font-mono text-foreground text-right max-w-[60%] truncate" title={evalSnap.ruleLabel}>{evalSnap.ruleLabel}</span>
         </div>
         <div className="flex items-center justify-between">
           <span className="text-muted-foreground flex items-center gap-2"><Zap className="h-3 w-3" /> Decision</span>
-          <span className="font-mono text-primary text-right max-w-[60%] truncate" title={evalSnap.decision}>{evalSnap.decision}</span>
+          <span className="font-mono text-foreground text-right max-w-[60%] truncate" title={evalSnap.decision}>{evalSnap.decision}</span>
         </div>
         <div className="flex items-center justify-between">
-          <span className="text-muted-foreground flex items-center gap-2"><Gauge className="h-3 w-3" /> Thresholds</span>
+          <span className="text-muted-foreground flex items-center gap-2"><Gauge className="h-3 w-3" /> Recommended output</span>
           <span className="font-mono text-foreground">
-            {thresholds.warningThreshold} / {thresholds.criticalThreshold} ppm
+            Fan {evalSnap.recommendation.fanStatus} · {evalSnap.recommendedDamperAngle}°
           </span>
         </div>
         <div className="flex items-center justify-between">
-          <span className="text-muted-foreground">Hysteresis</span>
-          <span className="font-mono text-foreground">±{thresholds.hysteresis} ppm</span>
+          <span className="text-muted-foreground flex items-center gap-2"><Gauge className="h-3 w-3" /> Decision boundaries</span>
+          <span className="font-mono text-foreground">
+            {thresholds.safeThreshold} / {thresholds.moderateThreshold} / {thresholds.highThreshold}
+          </span>
+        </div>
+        <div className="flex items-center justify-between">
+          <span className="text-muted-foreground">Min outdoor Δ</span>
+          <span className="font-mono text-foreground">≥ {thresholds.minOutdoorDelta} ppm</span>
         </div>
         <div className="flex items-center justify-between">
           <span className="text-muted-foreground">Heartbeat age</span>
