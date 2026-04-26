@@ -123,6 +123,9 @@ export default function ControlPage() {
           <p className="text-xs text-muted-foreground">
             These values configure the IF-ELSE supervisory layer that selects a ventilation level (0–3) before any actuator action. Updates apply immediately and are mirrored on the System Design page.
           </p>
+          <div className="rounded-md bg-muted/30 border border-border px-3 py-2 text-[11px] text-muted-foreground leading-relaxed">
+            <span className="font-mono text-foreground">Δ = indoor − outdoor</span>. Ventilation above Level 0 is only authorised when <span className="font-mono text-foreground">Δ ≥ min outdoor Δ</span> — i.e. outdoor air is genuinely cleaner.
+          </div>
 
           <div className="grid grid-cols-3 gap-3">
             <div>
@@ -134,6 +137,7 @@ export default function ControlPage() {
                 disabled={!canConfigureThresholds}
                 className="w-full px-3 py-2.5 bg-muted border border-border rounded-md text-sm text-foreground font-mono focus:outline-none focus:ring-1 focus:ring-primary transition-colors disabled:opacity-50"
               />
+              <p className="text-[10px] text-muted-foreground mt-1">Below → Level 0 (Closed / Safe).</p>
             </div>
             <div>
               <label className="block text-xs text-muted-foreground mb-1.5">Moderate ≤ (ppm)</label>
@@ -144,6 +148,7 @@ export default function ControlPage() {
                 disabled={!canConfigureThresholds}
                 className="w-full px-3 py-2.5 bg-muted border border-border rounded-md text-sm text-foreground font-mono focus:outline-none focus:ring-1 focus:ring-primary transition-colors disabled:opacity-50"
               />
+              <p className="text-[10px] text-muted-foreground mt-1">Safe ≤ indoor &lt; here → Level 1.</p>
             </div>
             <div>
               <label className="block text-xs text-muted-foreground mb-1.5">High ≤ (ppm)</label>
@@ -154,6 +159,7 @@ export default function ControlPage() {
                 disabled={!canConfigureThresholds}
                 className="w-full px-3 py-2.5 bg-muted border border-border rounded-md text-sm text-foreground font-mono focus:outline-none focus:ring-1 focus:ring-primary transition-colors disabled:opacity-50"
               />
+              <p className="text-[10px] text-muted-foreground mt-1">Above → Level 3 (Aggressive).</p>
             </div>
           </div>
 
@@ -167,7 +173,7 @@ export default function ControlPage() {
                 disabled={!canConfigureThresholds}
                 className="w-full px-3 py-2.5 bg-muted border border-border rounded-md text-sm text-foreground font-mono focus:outline-none focus:ring-1 focus:ring-primary transition-colors disabled:opacity-50"
               />
-              <p className="text-[10px] text-muted-foreground mt-1">Required (indoor − outdoor) to authorise ventilation.</p>
+              <p className="text-[10px] text-muted-foreground mt-1">Minimum outdoor advantage required to open the damper.</p>
             </div>
             <div>
               <label className="block text-xs text-muted-foreground mb-1.5">Stabilization band ± (ppm)</label>
@@ -178,7 +184,7 @@ export default function ControlPage() {
                 disabled={!canConfigureThresholds}
                 className="w-full px-3 py-2.5 bg-muted border border-border rounded-md text-sm text-foreground font-mono focus:outline-none focus:ring-1 focus:ring-primary transition-colors disabled:opacity-50"
               />
-              <p className="text-[10px] text-muted-foreground mt-1">Smooths transitions between levels (supporting role only).</p>
+              <p className="text-[10px] text-muted-foreground mt-1">Smooths level transitions — supporting stabilization, not the primary control.</p>
             </div>
           </div>
 
