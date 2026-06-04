@@ -944,6 +944,15 @@ Frontend mapping: `services/api.ts.fetchWithRetry` already retries on network / 
 
 ## 27. Changelog
 
+### 1.1.0 — Enterprise-readiness pass (current)
+- Added Device Lifecycle states (Registered/Online/Warning/Offline/Maintenance) with transition matrix.
+- Standardized Alarm Severity (INFO/WARNING/CRITICAL/EMERGENCY) with examples.
+- Documented Backup & Export strategy (CSV/JSON, restore safeguards) and Data Retention policy (hot/cold/hard-delete).
+- Added full Environment Configuration reference (backend / frontend / firmware).
+- Added Firmware Compatibility Guide (supported ESP32 boards, protocol, intervals, retry, offline recovery).
+- Added API Error Code reference with consistent error envelope.
+- Added Operational Readiness checklists for sysadmin / backend / firmware.
+
 ### 1.0.0 — Production-readiness pass (current)
 - Full README rewrite as single source of truth (architecture, API contract, ESP32 guide, deployment).
 - Role permission matrix.
