@@ -26,7 +26,15 @@ This document is the **single source of truth** for the project. A backend devel
 16. [System Health Monitoring](#16-system-health-monitoring)
 17. [Deployment (Ubuntu)](#17-deployment-ubuntu)
 18. [Developer Handoff](#18-developer-handoff)
-19. [Changelog](#19-changelog)
+19. [Device Lifecycle](#19-device-lifecycle)
+20. [Alarm Severity System](#20-alarm-severity-system)
+21. [Backup & Export Strategy](#21-backup--export-strategy)
+22. [Data Retention Policy](#22-data-retention-policy)
+23. [Environment Configuration Reference](#23-environment-configuration-reference)
+24. [Firmware Compatibility Guide](#24-firmware-compatibility-guide)
+25. [API Error Code Reference](#25-api-error-code-reference)
+26. [Operational Readiness Checklists](#26-operational-readiness-checklists)
+27. [Changelog](#27-changelog)
 
 ---
 
