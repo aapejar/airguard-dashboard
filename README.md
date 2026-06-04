@@ -686,7 +686,263 @@ You can build the firmware using **only this section and Sections 13–14**, wit
 
 ---
 
-## 19. Changelog
+## 19. Device Lifecycle
+
+A device transitions through a finite set of operational states. The frontend infers state from `SystemStatus.deviceOnline`, `heartbeatAge`, and the most recent reading's `ventilationStatus`; the backend should persist the canonical state on the `devices` table.
+
+| State        | Meaning                                                    | Entry Condition                                                                 | Exit Condition |
+|--------------|------------------------------------------------------------|----------------------------------------------------------------------------------|----------------|
+| Registered   | Provisioned in DB, never seen                              | Admin creates device record, no readings/heartbeats yet                          | First heartbeat → Online |
+| Online       | Healthy, sending readings + heartbeats on schedule         | `heartbeatAge < heartbeatTimeout` AND no fault flags                             | Heartbeat lapses OR fault flag |
+| Warning      | Reachable but degraded                                     | `wifiSignal ≤ −80 dBm` OR validation rejects ≥ 3 consecutive readings OR `ventilationStatus = "FAULT"` cleared once | Conditions clear for 60 s → Online; persist → Offline |
+| Offline      | No heartbeat within timeout                                | `heartbeatAge ≥ heartbeatTimeout` (default 15 s)                                 | New heartbeat received → Online |
+| Maintenance  | Admin-suppressed; alerts muted, commands rejected          | Admin sets `status = "maintenance"` via Users/Devices admin                      | Admin clears flag → Online/Offline (per heartbeat) |
+
+```text
+   Registered ──first heartbeat──► Online ◄──heartbeat──► Warning
+                                     │  ▲                    │
+                          timeout    │  │ reconnect          │ persistent fault
+                                     ▼  │                    ▼
+                                   Offline ◄────────────── Maintenance
+                                     ▲                       ▲
+                                     └── admin clear ────────┘
+```
+
+Transitions MUST emit an audit-log entry (`source: 'device'`) with `level` per the matrix in §20.
+
+---
+
+## 20. Alarm Severity System
+
+Standardized levels used by both `alerts` (system/device) and `auditLog` (auth/user). The `AlertItem.level` enum in `types/sensor.ts` carries `info | warning | critical`; `EMERGENCY` is reserved for the backend and surfaced as `critical` with `emergency: true` extension on the UI.
+
+| Level     | UI Color  | Use Case                                                          | Operator Action          | Auto-Notify? |
+|-----------|-----------|-------------------------------------------------------------------|--------------------------|--------------|
+| INFO      | muted     | Login success, settings saved, command accepted, device reconnect | None                     | No           |
+| WARNING   | amber     | CO₂ above `moderateThreshold`, RSSI degraded, repeated retries    | Review within shift      | No           |
+| CRITICAL  | red       | Device offline > timeout, CO₂ above `highThreshold`, fault flag   | Immediate review         | Yes (future) |
+| EMERGENCY | red+pulse | Multi-device blackout, safety interlock tripped, sensor freeze    | Immediate on-site action | Yes (future) |
+
+Examples:
+- INFO: `"User 'operator' issued command: Mode=MANUAL, Fan=ON, Damper=60°"`
+- WARNING: `"Indoor CO₂ 950 ppm exceeded moderate threshold (900 ppm)"`
+- CRITICAL: `"Device esp32-room-01 offline — no heartbeat for 18s"`
+- EMERGENCY: `"Sensor reading frozen for 5 min on esp32-room-01 — actuators forced fail-safe"`
+
+Backend SHOULD support `POST /api/alerts/ack` so operators can acknowledge CRITICAL/EMERGENCY events.
+
+---
+
+## 21. Backup & Export Strategy
+
+### Currently Implemented (frontend)
+- **Audit Log CSV** — `AuditLogPage` exports the in-memory audit list with timestamp, level, source, actor, message.
+- **Threshold persistence** — `localStorage.airguard.thresholds` (migrated from legacy schema).
+
+### Planned (backend-driven)
+| Artefact            | Format | Endpoint (proposed)                         | Role        | Notes |
+|---------------------|--------|---------------------------------------------|-------------|-------|
+| Sensor logs         | CSV    | `GET /api/devices/:id/readings/export?from&to` | operator+ | Streamed; chunked by day |
+| Audit logs          | CSV    | `GET /api/audit/export?from&to&source`      | admin       | Tamper-evident: include row hash chain |
+| System config       | JSON   | `GET /api/config/export`                    | admin       | Includes thresholds, settings, device list (no secrets) |
+| System settings backup | JSON | `GET /api/settings/backup` / `POST /api/settings/restore` | admin | Versioned snapshots in `backups/` |
+| Full DB backup      | SQL    | `pg_dump` cron job → `/var/backups/airguard/` | sysadmin  | Daily, retain 30, weekly retain 12 |
+
+### API Considerations
+- All export endpoints MUST stream (`Content-Type: text/csv` or `application/json`, `Transfer-Encoding: chunked`).
+- Filename header: `Content-Disposition: attachment; filename="airguard-<artefact>-<isoDate>.<ext>"`.
+- Never include `apiKey`, password hashes, or JWT secrets in any export.
+- Restore endpoints REQUIRE dual confirmation: `X-Confirm: true` header AND admin 2FA re-prompt.
+
+---
+
+## 22. Data Retention Policy
+
+| Stream              | Hot (online query)     | Cold (archive)              | Hard Delete      | Cleanup Strategy |
+|---------------------|------------------------|-----------------------------|------------------|------------------|
+| Sensor readings     | 30 days @ raw 5 s rate | 1 year @ 1-min downsample   | After 1 year     | Nightly cron: downsample older than 30 d, drop raw |
+| Alerts              | 90 days                | 1 year compressed JSON      | After 1 year     | Nightly cron |
+| Audit logs          | 1 year                 | 7 years (compliance)        | After 7 years    | Yearly archive to cold storage (S3/MinIO) |
+| User activity       | 1 year                 | 2 years                     | After 2 years    | Same as audit |
+| Command history     | 90 days                | —                           | After 90 days    | Nightly cron |
+| Backups (DB/config) | 30 daily + 12 weekly + 5 yearly | —                  | Rolling rotation | `cron + find -mtime` |
+
+Frontend in-memory caps (already enforced):
+- `history` ≤ `config.maxHistorySize` (default 500–1000).
+- `auditLog` ≤ 500 entries.
+- `commandHistory` ≤ 25 entries.
+
+Recommended Postgres approach: use **monthly partitioned tables** for `readings` and `audit_log`; drop old partitions in O(1) rather than `DELETE`.
+
+---
+
+## 23. Environment Configuration Reference
+
+### Backend (`/opt/airguard/backend/.env`)
+| Variable           | Required | Example                                              | Purpose |
+|--------------------|----------|------------------------------------------------------|---------|
+| `API_PORT`         | yes      | `8080`                                               | HTTP listen port for the Node service |
+| `DATABASE_URL`     | yes      | `postgres://airguard:***@localhost:5432/airguard`    | Postgres connection string |
+| `JWT_SECRET`       | yes      | 64-char random                                       | Signs/validates session JWTs |
+| `JWT_TTL`          | no       | `12h`                                                | Token lifetime |
+| `FRONTEND_URL`     | yes      | `https://airguard.example.com`                       | CORS allow-origin + redirect base |
+| `DEVICE_API_KEY`   | yes\*    | comma-separated keys, or omit if using DB table      | Validates device POST/GET routes |
+| `POLLING_INTERVAL` | no       | `5000`                                               | Default ms between device samples (echoed in config) |
+| `HEARTBEAT_TIMEOUT`| no       | `15000`                                              | ms before device flagged offline |
+| `TOTP_ISSUER`      | no       | `AirGuardPro`                                        | Real 2FA issuer label |
+| `LOG_LEVEL`        | no       | `info` / `debug`                                     | Server log verbosity |
+| `BACKUP_DIR`       | no       | `/var/backups/airguard`                              | Where backup cron writes |
+
+\* either `DEVICE_API_KEY` env or a `device_keys` DB table — backend MUST enforce one.
+
+### Frontend (build-time or runtime)
+Build-time (Vite, `.env.production`):
+- `VITE_APP_ENV` = `production` | `development`
+
+Runtime override (no rebuild) — inject `window.__AIRGUARD_CONFIG__` in `index.html`:
+```html
+<script>
+  window.__AIRGUARD_CONFIG__ = {
+    apiBaseUrl: 'https://airguard.example.com',
+    pollingInterval: 5000,
+    heartbeatTimeout: 15000,
+    maxRetries: 3
+  };
+</script>
+```
+
+### ESP32 Firmware (`platformio.ini` / NVS)
+| Key                | Purpose |
+|--------------------|---------|
+| `WIFI_SSID` / `WIFI_PASS` | Network credentials (NVS, not source) |
+| `BACKEND_URL`      | e.g. `https://airguard.example.com` |
+| `DEVICE_ID`        | Matches DB registration |
+| `DEVICE_API_KEY`   | Provisioned per device |
+| `SAMPLE_INTERVAL_MS` | Default 5000 |
+| `HEARTBEAT_INTERVAL_MS` | Default 10000 |
+
+---
+
+## 24. Firmware Compatibility Guide
+
+### Supported Boards (reference)
+- **ESP32-WROOM-32** (primary target)
+- **ESP32-WROVER-B** (extra PSRAM, optional)
+- **ESP32-S3-DevKitC-1** (USB-OTG variant, supported with same firmware)
+- **ESP32-C3** (RISC-V) — supported with PlatformIO `framework = arduino`, smaller flash; disable PSRAM features.
+- Not supported: ESP8266 (insufficient TLS/RAM headroom for the JSON + HTTPS workload).
+
+### Communication Protocol
+- **Transport:** HTTPS only in production (HTTP allowed on isolated LAN for bench testing).
+- **Format:** JSON, UTF-8, `Content-Type: application/json`.
+- **Auth:** `apiKey` field in body for device routes (Section 13).
+- **Timestamps:** ISO 8601 UTC, NTP-synced; firmware MUST reject `< 2024-01-01` as "clock not set".
+
+### Canonical JSON Shapes
+See Section 13 for full schemas. Minimal reading:
+```json
+{ "deviceId": "esp32-room-01", "apiKey": "***", "indoorCO2": 720, "outdoorCO2": 410, "fanStatus": "OFF", "damperAngle": 30, "ventilationStatus": "IDLE", "controlMode": "AUTO", "timestamp": "2026-06-04T10:00:05Z" }
+```
+
+### Intervals (defaults)
+| Loop                  | Interval | Endpoint |
+|-----------------------|----------|----------|
+| Sensor sample + POST  | 5000 ms  | `POST /api/device/readings` |
+| Heartbeat             | 10000 ms | `POST /api/device/heartbeat` |
+| Command poll          | 2000–5000 ms | `GET /api/device/:id/command` |
+| Config refresh        | 60000 ms | `GET /api/device/:id/config` |
+
+### Retry Strategy
+- Exponential backoff: `1s, 2s, 4s, 8s, 16s, 30s` (cap).
+- Reset backoff after one successful request.
+- Buffer up to 256 readings in RAM (~32 KB); flush oldest-first on reconnect.
+- DROP buffered readings older than 1 h to avoid backfill storms.
+
+### Offline Recovery
+- On Wi-Fi loss: reattempt every 5 s; do NOT block actuator loop.
+- On backend 5xx: treat as transient, keep buffering.
+- On backend 401/403: stop posting, raise local LED fault, wait for reboot/reprovision.
+- **Fail-safe state:** `fanStatus=OFF`, `damperAngle=0°`, `ventilationStatus=FAULT`.
+- Cache last good config in NVS; apply on boot before first network success.
+
+---
+
+## 25. API Error Code Reference
+
+All error responses share this envelope:
+```json
+{
+  "error": {
+    "code": "DEVICE_NOT_REGISTERED",
+    "message": "Human-readable explanation.",
+    "details": { "deviceId": "esp32-room-99" },
+    "requestId": "req_01HX..."
+  }
+}
+```
+
+| Code                    | HTTP | Origin             | Meaning / Recovery |
+|-------------------------|------|--------------------|--------------------|
+| `INVALID_PAYLOAD`       | 400  | any                | Body failed schema validation. Fix client. |
+| `INVALID_COMMAND`       | 400  | control            | `damperAngle` out of 0–90 or enum mismatch. |
+| `UNAUTHORIZED`          | 401  | auth               | Missing/expired JWT. Re-login. |
+| `INVALID_CREDENTIALS`   | 401  | `/auth/login`      | Wrong user/pass. Increment lockout counter. |
+| `INVALID_2FA_CODE`      | 401  | `/auth/2fa/verify` | Wrong TOTP code. |
+| `INVALID_API_KEY`       | 401  | device routes      | Unknown `apiKey`. Firmware: stop, await reprovision. |
+| `FORBIDDEN`             | 403  | any                | Role lacks permission for the action. |
+| `DEVICE_NOT_REGISTERED` | 404  | device routes      | `deviceId` not in DB. Admin must register. |
+| `DEVICE_OFFLINE`        | 409  | control            | Command cannot be applied — device unreachable. |
+| `COMMAND_IN_FLIGHT`     | 409  | control            | Another command pending. Retry after `Retry-After`. |
+| `ACCOUNT_LOCKED`        | 423  | auth               | Too many failed attempts. Honour `lockoutUntil`. |
+| `RATE_LIMITED`          | 429  | any                | Slow down; honour `Retry-After`. |
+| `INTERNAL_ERROR`        | 500  | any                | Backend bug. Log `requestId`. |
+| `SERVICE_UNAVAILABLE`   | 503  | any                | Maintenance window. Retry with backoff. |
+
+Frontend mapping: `services/api.ts.fetchWithRetry` already retries on network / 5xx and respects `requestTimeout`; 4xx errors must be surfaced to the user via `useToast` rather than retried.
+
+---
+
+## 26. Operational Readiness Checklists
+
+### Deployment Readiness (sysadmin)
+- [ ] Ubuntu 22.04 LTS or 24.04 LTS host, hardened (SSH key only, ufw enabled).
+- [ ] Domain + TLS cert via Let's Encrypt (`certbot --nginx`).
+- [ ] Nginx config from §17 installed and `nginx -t` passes.
+- [ ] PostgreSQL 14+ installed; dedicated `airguard` DB + user; `pg_hba` restricted.
+- [ ] `pm2` (or `systemd` unit) supervising backend; `pm2 startup` enabled.
+- [ ] `.env` populated; permissions `0600`, owner backend user.
+- [ ] Nightly `pg_dump` cron writing to `BACKUP_DIR`, rotation verified.
+- [ ] Log rotation (`logrotate`) configured for backend stdout/stderr.
+- [ ] Monitoring agent (Prometheus node_exporter or equivalent) running.
+- [ ] Health probe (`GET /api/health`) returns 200 from public domain.
+
+### Backend Integration (backend dev)
+- [ ] All endpoints in §13 implemented with documented payloads.
+- [ ] All error responses use envelope in §25.
+- [ ] JWT issued on login; refresh + revocation in place.
+- [ ] RBAC enforced server-side per §7 (frontend RBAC is UX only).
+- [ ] Rate limiting on `/api/auth/*` and device routes.
+- [ ] Validators mirror constraints in `src/services/validators.ts`.
+- [ ] Audit log row written for every privileged action.
+- [ ] Device `apiKey` storage hashed (argon2/bcrypt) in DB.
+- [ ] Postgres tables partitioned per §22 retention policy.
+- [ ] CORS allows only `FRONTEND_URL`.
+
+### ESP32 Integration (firmware dev)
+- [ ] Board supported per §24.
+- [ ] Wi-Fi creds + `DEVICE_ID` + `apiKey` provisioned in NVS, not in source.
+- [ ] NTP sync at boot; reject pre-2024 timestamps.
+- [ ] Sample loop @ 5 s; heartbeat @ 10 s; command poll 2–5 s; config refresh @ 60 s.
+- [ ] Exponential backoff retry (§24) with bounded RAM buffer.
+- [ ] Fail-safe state (`fan=OFF`, `damper=0°`) on Wi-Fi loss or 401/403.
+- [ ] Range validation on sensor data; mark `FAULT` if out of bounds.
+- [ ] Cached config restored from NVS on boot.
+- [ ] OTA update path documented and tested.
+- [ ] Field set in every POST matches §14 byte-for-byte.
+
+---
+
+## 27. Changelog
 
 ### 1.0.0 — Production-readiness pass (current)
 - Full README rewrite as single source of truth (architecture, API contract, ESP32 guide, deployment).
