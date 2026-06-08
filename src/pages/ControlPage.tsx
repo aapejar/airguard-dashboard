@@ -23,9 +23,9 @@ export default function ControlPage() {
   const canControl = hasRole('admin', 'operator');
   const canConfigureThresholds = hasRole('admin', 'operator');
 
-  const [mode, setMode] = useState<'AUTO' | 'MANUAL'>(latest.controlMode);
-  const [fanOn, setFanOn] = useState(latest.fanStatus === 'ON');
-  const [damperAngle, setDamperAngle] = useState(latest.damperAngle);
+  const [mode, setMode] = useState<'AUTO' | 'MANUAL'>(latest?.controlMode ?? 'AUTO');
+  const [fanOn, setFanOn] = useState(latest?.fanStatus === 'ON');
+  const [damperAngle, setDamperAngle] = useState(latest?.damperAngle ?? 0);
   const [showConfirm, setShowConfirm] = useState(false);
   const [applied, setApplied] = useState(false);
   const [cmdError, setCmdError] = useState<string | null>(null);
@@ -99,17 +99,17 @@ export default function ControlPage() {
           <div className="grid grid-cols-3 gap-4 text-sm">
             <div>
               <p className="text-muted-foreground text-xs">Mode</p>
-              <p className="font-mono font-semibold text-foreground">{latest.controlMode}</p>
+              <p className="font-mono font-semibold text-foreground">{latest?.controlMode ?? '—'}</p>
             </div>
             <div>
               <p className="text-muted-foreground text-xs">Fan</p>
-              <p className={cn('font-mono font-semibold', latest.fanStatus === 'ON' ? 'text-success' : 'text-muted-foreground')}>
-                {latest.fanStatus}
+              <p className={cn('font-mono font-semibold', latest?.fanStatus === 'ON' ? 'text-success' : 'text-muted-foreground')}>
+                {latest?.fanStatus ?? '—'}
               </p>
             </div>
             <div>
               <p className="text-muted-foreground text-xs">Damper</p>
-              <p className="font-mono font-semibold text-foreground">{latest.damperAngle}°</p>
+              <p className="font-mono font-semibold text-foreground">{latest ? `${latest.damperAngle}°` : '—'}</p>
             </div>
           </div>
         </div>

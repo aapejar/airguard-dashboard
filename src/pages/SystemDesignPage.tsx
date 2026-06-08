@@ -19,7 +19,7 @@ export default function SystemDesignPage() {
   const { thresholds, latest, getEvaluation } = useDevice();
   const { safeThreshold: safe, moderateThreshold: mod, highThreshold: high, minOutdoorDelta: dmin, hysteresis } = thresholds;
   const evalSnap = getEvaluation();
-  const delta = latest.indoorCO2 - latest.outdoorCO2;
+  const delta = latest ? latest.indoorCO2 - latest.outdoorCO2 : 0;
   const deltaOk = delta >= dmin;
   const blocked = evalSnap.rule === 'level-blocked-outdoor-worse';
 
@@ -251,12 +251,12 @@ export default function SystemDesignPage() {
             <div className="grid grid-cols-3 gap-2 mb-3">
               <div className="bg-muted/30 rounded-md p-2 text-center">
                 <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Indoor</p>
-                <p className="font-mono text-sm font-semibold text-foreground">{latest.indoorCO2}</p>
+                <p className="font-mono text-sm font-semibold text-foreground">{latest ? latest.indoorCO2 : '—'}</p>
                 <p className="text-[9px] text-muted-foreground">ppm</p>
               </div>
               <div className="bg-muted/30 rounded-md p-2 text-center">
                 <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Outdoor</p>
-                <p className="font-mono text-sm font-semibold text-foreground">{latest.outdoorCO2}</p>
+                <p className="font-mono text-sm font-semibold text-foreground">{latest ? latest.outdoorCO2 : '—'}</p>
                 <p className="text-[9px] text-muted-foreground">ppm</p>
               </div>
               <div className={cn('rounded-md p-2 text-center', deltaOk ? 'bg-success/10' : 'bg-warning/10')}>

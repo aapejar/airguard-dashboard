@@ -1,6 +1,5 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { DashboardLayout } from '@/components/DashboardLayout';
-import { mockSettings } from '@/data/mockData';
 import { api } from '@/services/api';
 import { useDevice } from '@/context/DeviceContext';
 import { useAuth } from '@/context/AuthContext';
@@ -28,7 +27,12 @@ interface ExtendedSettings extends SystemSettings {
 }
 
 const defaultExtended: ExtendedSettings = {
-  ...mockSettings,
+  co2WarningThreshold: 600,
+  co2CriticalThreshold: 1000,
+  refreshInterval: 10,
+  deviceName: '',
+  location: '',
+  deviceEndpoint: '',
   requestTimeout: 8,
   heartbeatTimeout: 15,
   reconnectInterval: 5,
@@ -52,6 +56,15 @@ export default function SettingsPage() {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
+
+  // Load actual settings from the backend on mount / device change.
+  useEffect(() => {
+    let cancelled = false;
+    api.getSettings(deviceId)
+      .then(s => { if (!cancelled && s) setSettings(prev => ({ ...prev, ...s })); })
+      .catch(() => { /* keep defaults */ });
+    return () => { cancelled = true; };
+  }, [deviceId]);
 
   const update = <K extends keyof ExtendedSettings>(key: K, value: ExtendedSettings[K]) => {
     setSettings(prev => ({ ...prev, [key]: value }));
