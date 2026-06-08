@@ -1,150 +1,153 @@
 /**
- * Authentication service layer.
- *
- * Frontend-only simulation today, but structured to map 1-to-1 with a real
- * backend (POST /api/auth/login, POST /api/auth/2fa/verify, POST /api/auth/logout).
- * When the backend is available, swap the mock branches for `fetchWithRetry`
- * calls — the public surface (login / verify2FA / logout) stays identical.
- *
- * NOTE: credentials and the demo TOTP code live ONLY in this module and are
- * never exposed through the UI. In production these checks happen server-side
- * and this file becomes a thin HTTP wrapper.
+ * AuthService — thin client over the AirGuard backend `/api/auth/*` routes.
+ * All credentials are validated server-side; this module never holds passwords.
  */
-
 import type { User, UserRole } from '@/types/sensor';
+import { apiFetch, ApiError } from '@/services/api';
+import { tokenStore } from '@/services/tokenStore';
+import { config } from '@/config';
 
-// ── Internal credential store (dev only — replace with backend) ──────────
-interface InternalUser extends User {
-  password: string;
-  status: 'active' | 'disabled';
-  lastLogin: string | null;
-  twoFactorEnabled: boolean;
-  createdAt: string;
-}
-
-const DEV_USERS: InternalUser[] = [
-  { id: '1', username: 'admin', role: 'admin', password: 'admin123', status: 'active', twoFactorEnabled: true,  lastLogin: null, createdAt: '2025-01-01T00:00:00Z' },
-  { id: '2', username: 'operator', role: 'operator', password: 'operator123', status: 'active', twoFactorEnabled: false, lastLogin: null, createdAt: '2025-01-05T00:00:00Z' },
-  { id: '3', username: 'user', role: 'user', password: 'user123', status: 'active', twoFactorEnabled: false, lastLogin: null, createdAt: '2025-01-10T00:00:00Z' },
-];
-
-/** Demo TOTP code. In production, validated server-side against a real TOTP secret. */
-const DEMO_TOTP_CODE = '123456';
-
-// ── Public response shapes ──────────────────────────────────────────────
 export type LoginResponse =
   | { status: 'success'; user: User }
   | { status: 'requires_2fa'; pendingUser: User; challengeId: string }
-  | { status: 'invalid_credentials' };
+  | { status: 'invalid_credentials'; message?: string };
 
 export type Verify2FAResponse =
   | { status: 'success'; user: User }
-  | { status: 'invalid_code' };
+  | { status: 'invalid_code'; message?: string };
 
-// ── Helpers ─────────────────────────────────────────────────────────────
-const delay = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
-const toPublicUser = (u: InternalUser): User => ({
-  id: u.id,
-  username: u.username,
-  role: u.role,
-  status: u.status,
-  lastLogin: u.lastLogin,
-  twoFactorEnabled: u.twoFactorEnabled,
-  createdAt: u.createdAt,
-});
+interface BackendUser {
+  id: string; username: string; role: UserRole; roles?: UserRole[];
+  status?: 'active' | 'disabled';
+  twoFactorEnabled?: boolean;
+  lastLogin?: string | null;
+  createdAt?: string;
+}
 
-// ── Service ─────────────────────────────────────────────────────────────
+const url = (p: string) => `${config.apiBaseUrl}${p}`;
+
+function normalize(u: BackendUser): User {
+  return {
+    id: u.id,
+    username: u.username,
+    role: u.role,
+    status: u.status,
+    twoFactorEnabled: u.twoFactorEnabled,
+    lastLogin: u.lastLogin,
+    createdAt: u.createdAt,
+  };
+}
+
 export const authService = {
-  /**
-   * POST /api/auth/login
-   * Returns either a session, a 2FA challenge (admin), or invalid_credentials.
-   */
+  async restoreSession(): Promise<User | null> {
+    if (!tokenStore.access && !tokenStore.refresh) return null;
+    try {
+      const data = await apiFetch<{ user: BackendUser }>(url('/api/auth/me'));
+      return normalize(data.user);
+    } catch {
+      tokenStore.clear();
+      return null;
+    }
+  },
+
   async login(username: string, password: string): Promise<LoginResponse> {
-    await delay(400);
-    const found = DEV_USERS.find(u => u.username === username && u.password === password);
-    if (!found) return { status: 'invalid_credentials' };
-    if (found.status === 'disabled') return { status: 'invalid_credentials' };
-    found.lastLogin = new Date().toISOString();
-
-    const publicUser = toPublicUser(found);
-    if (found.role === 'admin' && found.twoFactorEnabled) {
-      return {
-        status: 'requires_2fa',
-        pendingUser: publicUser,
-        challengeId: `chal-${Date.now()}`,
-      };
+    try {
+      const data = await apiFetch<{
+        status: 'success' | 'requires_2fa';
+        user?: BackendUser;
+        challengeId?: string;
+        tokens?: { access: string; refresh: string };
+      }>(url('/api/auth/login'), {
+        method: 'POST',
+        body: JSON.stringify({ username, password }),
+      });
+      if (data.status === 'requires_2fa') {
+        return {
+          status: 'requires_2fa',
+          pendingUser: { id: '', username, role: 'admin' } as User,
+          challengeId: data.challengeId!,
+        };
+      }
+      if (data.tokens) tokenStore.set(data.tokens);
+      return { status: 'success', user: normalize(data.user!) };
+    } catch (err) {
+      if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
+        return { status: 'invalid_credentials', message: err.message };
+      }
+      throw err;
     }
-    return { status: 'success', user: publicUser };
   },
 
-  /**
-   * POST /api/auth/2fa/verify
-   * Validates the time-based one-time code for an in-flight challenge.
-   */
-  async verify2FA(_challengeId: string, pendingUser: User, code: string): Promise<Verify2FAResponse> {
-    await delay(350);
-    if (code.trim() !== DEMO_TOTP_CODE) return { status: 'invalid_code' };
-    return { status: 'success', user: pendingUser };
+  async verify2FA(challengeId: string, _pendingUser: User, code: string): Promise<Verify2FAResponse> {
+    try {
+      const data = await apiFetch<{
+        status: 'success';
+        user: BackendUser;
+        tokens: { access: string; refresh: string };
+      }>(url('/api/auth/2fa/verify'), {
+        method: 'POST',
+        body: JSON.stringify({ challengeId, code }),
+      });
+      tokenStore.set(data.tokens);
+      return { status: 'success', user: normalize(data.user) };
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        return { status: 'invalid_code', message: err.message };
+      }
+      throw err;
+    }
   },
 
-  /**
-   * POST /api/auth/logout — fire-and-forget on the backend; here it's a no-op.
-   */
   async logout(): Promise<void> {
-    await delay(50);
+    const refresh = tokenStore.refresh;
+    try {
+      await apiFetch(url('/api/auth/logout'), {
+        method: 'POST',
+        body: JSON.stringify({ refreshToken: refresh }),
+      });
+    } catch { /* ignore */ }
+    tokenStore.clear();
   },
 
-  // ── Local user CRUD (admin) — backend-ready surface ────────────
-  listUsers(): User[] {
-    return DEV_USERS.map(toPublicUser);
+  // ── Admin user management (real backend) ───────────────
+  async listUsers(): Promise<User[]> {
+    const data = await apiFetch<{ users: BackendUser[] }>(url('/api/users'));
+    return data.users.map(normalize);
   },
 
-  createUser(username: string, password: string, role: UserRole): { ok: boolean; error?: string; user?: User } {
-    if (!username.trim() || !password.trim()) return { ok: false, error: 'Username and password required' };
-    if (DEV_USERS.some(u => u.username === username)) return { ok: false, error: 'Username already exists' };
-    const newUser: InternalUser = {
-      id: `u-${Date.now()}`,
-      username: username.trim(),
-      password,
-      role,
-      status: 'active',
-      twoFactorEnabled: role === 'admin',
-      lastLogin: null,
-      createdAt: new Date().toISOString(),
-    };
-    DEV_USERS.push(newUser);
-    return { ok: true, user: toPublicUser(newUser) };
-  },
-
-  deleteUser(id: string): void {
-    const idx = DEV_USERS.findIndex(u => u.id === id);
-    if (idx >= 0) DEV_USERS.splice(idx, 1);
-  },
-
-  updateUserRole(id: string, role: UserRole): void {
-    const u = DEV_USERS.find(x => x.id === id);
-    if (u) {
-      u.role = role;
-      // Admins must have 2FA enforced
-      if (role === 'admin') u.twoFactorEnabled = true;
+  async createUser(username: string, password: string, role: UserRole): Promise<{ ok: boolean; error?: string; user?: User }> {
+    try {
+      const data = await apiFetch<{ user: BackendUser }>(url('/api/users'), {
+        method: 'POST', body: JSON.stringify({ username, password, role }),
+      });
+      return { ok: true, user: normalize(data.user) };
+    } catch (err) {
+      if (err instanceof ApiError) return { ok: false, error: err.message };
+      return { ok: false, error: 'Failed to create user' };
     }
   },
 
-  setUserStatus(id: string, status: 'active' | 'disabled'): void {
-    const u = DEV_USERS.find(x => x.id === id);
-    if (u) u.status = status;
-  },
+  deleteUser: (id: string) =>
+    apiFetch(url(`/api/users/${id}`), { method: 'DELETE' }),
 
-  setUser2FA(id: string, enabled: boolean): void {
-    const u = DEV_USERS.find(x => x.id === id);
-    if (u) u.twoFactorEnabled = enabled;
-  },
+  updateUserRole: (id: string, role: UserRole) =>
+    apiFetch(url(`/api/users/${id}/role`), { method: 'PATCH', body: JSON.stringify({ role }) }),
 
-  resetPassword(id: string, newPassword: string): { ok: boolean; error?: string } {
-    if (!newPassword.trim()) return { ok: false, error: 'Password required' };
-    const u = DEV_USERS.find(x => x.id === id);
-    if (!u) return { ok: false, error: 'User not found' };
-    u.password = newPassword;
-    return { ok: true };
+  setUserStatus: (id: string, status: 'active' | 'disabled') =>
+    apiFetch(url(`/api/users/${id}/status`), { method: 'PATCH', body: JSON.stringify({ status }) }),
+
+  setUser2FA: (id: string, enabled: boolean) =>
+    apiFetch(url(`/api/users/${id}/2fa`), { method: 'PATCH', body: JSON.stringify({ enabled }) }),
+
+  async resetPassword(id: string, newPassword: string): Promise<{ ok: boolean; error?: string }> {
+    try {
+      await apiFetch(url(`/api/users/${id}/reset-password`), {
+        method: 'POST', body: JSON.stringify({ newPassword }),
+      });
+      return { ok: true };
+    } catch (err) {
+      if (err instanceof ApiError) return { ok: false, error: err.message };
+      return { ok: false, error: 'Reset failed' };
+    }
   },
 };
