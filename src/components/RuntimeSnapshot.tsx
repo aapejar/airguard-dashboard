@@ -11,6 +11,19 @@ function formatAge(ms: number): string {
 export function RuntimeSnapshot() {
   const { latest, thresholds, heartbeatAge, status, getEvaluation } = useDevice();
   const evalSnap = getEvaluation();
+  if (!latest || !evalSnap) {
+    return (
+      <div className="panel p-4">
+        <h3 className="text-sm font-semibold text-foreground mb-3 uppercase tracking-wider flex items-center gap-2">
+          <Activity className="h-3.5 w-3.5 text-primary" />
+          Runtime Snapshot
+        </h3>
+        <p className="text-xs text-muted-foreground leading-relaxed">
+          Waiting for device data… The supervisory IF-ELSE evaluation will appear once the device reports its first reading.
+        </p>
+      </div>
+    );
+  }
   const delta = latest.indoorCO2 - latest.outdoorCO2;
   const deltaOk = delta >= thresholds.minOutdoorDelta;
   const levelTone =
@@ -85,7 +98,7 @@ export function RuntimeSnapshot() {
         </div>
         <div className="flex items-center justify-between">
           <span className="text-muted-foreground">Heartbeat</span>
-          <span className={cn('font-mono', status.deviceOnline ? 'text-success' : 'text-destructive')}>
+          <span className={cn('font-mono', status?.deviceOnline ? 'text-success' : 'text-destructive')}>
             {formatAge(heartbeatAge)}
           </span>
         </div>

@@ -3,7 +3,7 @@ import { cn } from '@/lib/utils';
 import { Wifi, Clock, Activity, Server } from 'lucide-react';
 
 interface SystemStatusPanelProps {
-  status: SystemStatus;
+  status: SystemStatus | null;
 }
 
 function formatUptime(seconds: number): string {
@@ -23,6 +23,16 @@ function formatTimeAgo(iso: string): string {
 }
 
 export function SystemStatusPanel({ status }: SystemStatusPanelProps) {
+  if (!status) {
+    return (
+      <div className="panel p-4">
+        <h3 className="text-sm font-semibold text-foreground mb-3 uppercase tracking-wider">System Status</h3>
+        <p className="text-xs text-muted-foreground leading-relaxed">
+          Waiting for device data…
+        </p>
+      </div>
+    );
+  }
   const signalStrength = status.wifiSignal > -50 ? 'Strong' : status.wifiSignal > -70 ? 'Good' : 'Weak';
   const signalColor = status.wifiSignal > -50 ? 'text-success' : status.wifiSignal > -70 ? 'text-warning' : 'text-destructive';
 

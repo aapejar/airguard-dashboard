@@ -2,50 +2,37 @@ import { createContext, useContext, useState, useCallback, useEffect, useRef, ty
 import type { SensorReading, SystemStatus, ControlCommand, AlertItem, AlertSource, CommandRecord, EvaluationSnapshot } from '@/types/sensor';
 import { config } from '@/config';
 import { api } from '@/services/api';
-import { generateHistoricalReadings, mockAlerts } from '@/data/mockData';
 
 // ── Types ────────────────────────────────────────────────
 
 export interface ControlThresholds {
-  // ── Decision boundaries used by the IF-ELSE supervisory layer ──
-  /** Upper bound of "safe" indoor CO₂ (ppm). Below this → Level 0 (Closed / Safe). */
   safeThreshold: number;
-  /** Upper bound of "moderate" indoor CO₂ (ppm). Below this → Level 1 (Light Ventilation). */
   moderateThreshold: number;
-  /** Upper bound of "high" indoor CO₂ (ppm). Below this → Level 2 (Medium Ventilation). Above → Level 3 (Aggressive). */
   highThreshold: number;
-  /** Minimum outdoor advantage (indoor − outdoor, ppm) required to authorise ventilation. */
   minOutdoorDelta: number;
-  /**
-   * Stabilization band (ppm). Used as a transition smoothing margin around each
-   * boundary to avoid rapid level switching. NOT the primary control method.
-   */
   hysteresis: number;
-  // ── Legacy aliases (deprecated, kept for backwards compatibility with persisted state) ──
-  /** @deprecated Use `moderateThreshold`. */
-  warningThreshold?: number;
-  /** @deprecated Use `highThreshold`. */
-  criticalThreshold?: number;
+  /** @deprecated Use moderateThreshold. */ warningThreshold?: number;
+  /** @deprecated Use highThreshold. */ criticalThreshold?: number;
 }
 
 interface DeviceState {
-  latest: SensorReading;
-  status: SystemStatus;
+  /** Null until the backend returns the first reading for this device. */
+  latest: SensorReading | null;
+  status: SystemStatus | null;
   history: SensorReading[];
-  /** Real device/system alerts only (threshold breaches, disconnects, faults) */
   alerts: AlertItem[];
-  /** Activity / audit trail (auth, user actions, settings, control commands) */
   auditLog: AlertItem[];
-  /** Last N control commands sent, with result */
   commandHistory: CommandRecord[];
   thresholds: ControlThresholds;
   isLoading: boolean;
   isCommandPending: boolean;
   error: string | null;
-  /** Count of polling cycles completed since last reset */
-  cycleCount: number;
-  /** True when system has entered "ready / waiting for real data" state */
+  /** True once at least one telemetry sample has been received from the backend. */
+  hasData: boolean;
+  /** @deprecated Always false now (no built-in simulation). */
   isReadyState: boolean;
+  /** @deprecated Always 0. */
+  cycleCount: number;
 }
 
 interface DeviceContextType extends DeviceState {
@@ -58,24 +45,20 @@ interface DeviceContextType extends DeviceState {
   refresh: () => Promise<void>;
   updateThresholds: (t: Partial<ControlThresholds>, actor?: string) => void;
   resetThresholds: (actor?: string) => void;
-  /** Reset the cycle counter and re-arm seeded simulation */
+  /** @deprecated No-op kept for compatibility. */
   resumeSimulation: () => void;
-  /** Append a structured event to the audit log */
   logEvent: (
     level: AlertItem['level'],
     message: string,
     opts?: { source?: AlertSource; actor?: string },
   ) => void;
-  /** Compute current control logic evaluation snapshot from latest reading */
-  getEvaluation: () => EvaluationSnapshot;
-  /** Age (ms) since last successful heartbeat */
+  getEvaluation: () => EvaluationSnapshot | null;
   heartbeatAge: number;
 }
 
 const DeviceContext = createContext<DeviceContextType | null>(null);
 
 const THRESHOLDS_KEY = 'airguard.thresholds';
-const MAX_CYCLES = 5;
 const MAX_COMMAND_HISTORY = 25;
 
 export const DEFAULT_THRESHOLDS: ControlThresholds = {
@@ -86,51 +69,24 @@ export const DEFAULT_THRESHOLDS: ControlThresholds = {
   hysteresis: 50,
 };
 
-const defaultThresholds = DEFAULT_THRESHOLDS;
-
 function loadThresholds(): ControlThresholds {
   try {
     const raw = localStorage.getItem(THRESHOLDS_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
-      // Migrate legacy schema (warningThreshold / criticalThreshold) → new boundaries.
-      const migrated: ControlThresholds = {
-        ...defaultThresholds,
+      return {
+        ...DEFAULT_THRESHOLDS,
         ...parsed,
-        safeThreshold: parsed.safeThreshold ?? Math.max(400, (parsed.warningThreshold ?? defaultThresholds.moderateThreshold) - 200),
-        moderateThreshold: parsed.moderateThreshold ?? parsed.warningThreshold ?? defaultThresholds.moderateThreshold,
-        highThreshold: parsed.highThreshold ?? parsed.criticalThreshold ?? defaultThresholds.highThreshold,
-        minOutdoorDelta: parsed.minOutdoorDelta ?? defaultThresholds.minOutdoorDelta,
-        hysteresis: parsed.hysteresis ?? defaultThresholds.hysteresis,
+        safeThreshold: parsed.safeThreshold ?? DEFAULT_THRESHOLDS.safeThreshold,
+        moderateThreshold: parsed.moderateThreshold ?? parsed.warningThreshold ?? DEFAULT_THRESHOLDS.moderateThreshold,
+        highThreshold: parsed.highThreshold ?? parsed.criticalThreshold ?? DEFAULT_THRESHOLDS.highThreshold,
+        minOutdoorDelta: parsed.minOutdoorDelta ?? DEFAULT_THRESHOLDS.minOutdoorDelta,
+        hysteresis: parsed.hysteresis ?? DEFAULT_THRESHOLDS.hysteresis,
       };
-      return migrated;
     }
   } catch { /* ignore */ }
-  return defaultThresholds;
+  return DEFAULT_THRESHOLDS;
 }
-
-// ── Seed data ────────────────────────────────────────────
-const seededHistory = generateHistoricalReadings(50);
-
-const initialReading: SensorReading = {
-  id: 'initial-001',
-  deviceId: config.defaultDeviceId,
-  indoorCO2: 633.8,
-  outdoorCO2: 380.3,
-  fanStatus: 'ON',
-  damperAngle: 69,
-  ventilationStatus: 'IDLE',
-  controlMode: 'AUTO',
-  timestamp: new Date().toISOString(),
-};
-
-const initialStatus: SystemStatus = {
-  deviceOnline: true,
-  lastHeartbeat: new Date().toISOString(),
-  uptime: 172800,
-  firmwareVersion: 'v2.1.4',
-  wifiSignal: -42,
-};
 
 function appendUnique(existing: SensorReading[], incoming: SensorReading, maxSize: number): SensorReading[] {
   if (existing.some(r => r.id === incoming.id)) return existing;
@@ -142,69 +98,51 @@ function appendUnique(existing: SensorReading[], incoming: SensorReading, maxSiz
 
 export function DeviceProvider({ children }: { children: ReactNode }) {
   const [deviceId, setDeviceId] = useState(config.defaultDeviceId);
-  const [latest, setLatest] = useState<SensorReading>(initialReading);
-  const [status, setStatus] = useState<SystemStatus>(initialStatus);
-  const [history, setHistory] = useState<SensorReading[]>(seededHistory);
-  const [alerts, setAlerts] = useState<AlertItem[]>(
-    mockAlerts.map(a => ({ ...a, source: a.source ?? 'system' })),
-  );
+  const [latest, setLatest] = useState<SensorReading | null>(null);
+  const [status, setStatus] = useState<SystemStatus | null>(null);
+  const [history, setHistory] = useState<SensorReading[]>([]);
+  const [alerts, setAlerts] = useState<AlertItem[]>([]);
   const [auditLog, setAuditLog] = useState<AlertItem[]>([]);
   const [commandHistory, setCommandHistory] = useState<CommandRecord[]>([]);
   const [thresholds, setThresholds] = useState<ControlThresholds>(loadThresholds);
   const [isLoading, setIsLoading] = useState(false);
   const [isCommandPending, setIsCommandPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [cycleCount, setCycleCount] = useState(0);
-  const [isReadyState, setIsReadyState] = useState(false);
+  const [hasData, setHasData] = useState(false);
   const [heartbeatAge, setHeartbeatAge] = useState(0);
 
-  const lastHeartbeatRef = useRef<number>(Date.now());
+  const lastHeartbeatRef = useRef<number>(0);
   const commandLockRef = useRef(false);
-  const isReadyStateRef = useRef(false);
   const cleanupRef = useRef<(() => void) | null>(null);
 
-  // Persist thresholds
   useEffect(() => {
     localStorage.setItem(THRESHOLDS_KEY, JSON.stringify(thresholds));
   }, [thresholds]);
 
-  // ── Fetch latest reading ───────────────────────────
+  // ── Reset state when device changes ──────────────────
+  useEffect(() => {
+    setLatest(null); setStatus(null); setHistory([]); setHasData(false);
+    setError(null); lastHeartbeatRef.current = 0;
+  }, [deviceId]);
+
+  // ── Poll backend ─────────────────────────────────────
   const refresh = useCallback(async () => {
-    if (isReadyStateRef.current) return; // paused — waiting for real data
     try {
       const [reading, sysStatus] = await Promise.all([
         api.getLatestReading(deviceId),
-        api.getSystemStatus(deviceId),
+        api.getSystemStatus(deviceId).catch(() => null),
       ]);
-
-      setLatest(reading);
-      setStatus(sysStatus);
+      if (sysStatus) setStatus(sysStatus);
+      if (reading) {
+        setLatest(reading);
+        setHistory(prev => appendUnique(prev, reading, config.maxHistorySize));
+        setHasData(true);
+        lastHeartbeatRef.current = Date.now();
+      }
       setError(null);
-      lastHeartbeatRef.current = Date.now();
-      setHistory(prev => appendUnique(prev, reading, config.maxHistorySize));
-
-      setCycleCount(prev => {
-        const next = prev + 1;
-        if (next >= MAX_CYCLES) {
-          isReadyStateRef.current = true;
-          setIsReadyState(true);
-          setAlerts(a => [
-            {
-              id: `sys-${Date.now()}`,
-              level: 'info',
-              message: 'Seeded simulation completed — system ready, awaiting real device data',
-              timestamp: new Date().toISOString(),
-              source: 'system',
-            },
-            ...a,
-          ]);
-        }
-        return next;
-      });
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Failed to fetch data';
       setError(msg);
-      console.error('[DeviceContext] refresh error:', msg);
     }
   }, [deviceId]);
 
@@ -215,14 +153,25 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
     return () => clearInterval(pollId);
   }, [refresh]);
 
-  // ── Subscribe to auth/audit events from outside the provider tree ─
+  // ── Load recent history once per device change ──────
   useEffect(() => {
-    // Lazy import to avoid circular deps if any
+    let cancelled = false;
+    api.getHistoricalReadings(deviceId, config.maxHistorySize)
+      .then(rows => {
+        if (cancelled || !rows.length) return;
+        // Backend returns newest→oldest; chart expects oldest→newest
+        setHistory([...rows].reverse());
+      })
+      .catch(() => { /* tolerate */ });
+    return () => { cancelled = true; };
+  }, [deviceId]);
+
+  // ── Audit bus → audit log mirror ─────────────────────
+  useEffect(() => {
     let mounted = true;
     import('@/services/auditBus').then(({ auditBus }) => {
       if (!mounted) return;
       const unsub = auditBus.subscribe(e => {
-        // Auth and other non-system events feed the audit log only.
         const entry: AlertItem = {
           id: `audit-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
           level: e.level,
@@ -233,25 +182,23 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
         };
         setAuditLog(prev => [entry, ...prev].slice(0, 500));
       });
-      // Store cleanup on the closure
       cleanupRef.current = unsub;
     });
-    return () => {
-      mounted = false;
-      cleanupRef.current?.();
-    };
+    return () => { mounted = false; cleanupRef.current?.(); };
   }, []);
 
-  // ── Heartbeat-based offline detection + age tracking ───
+  // ── Heartbeat watchdog (only meaningful once data has arrived) ─
   useEffect(() => {
-    let wasOnline = true;
-    const checkId = setInterval(() => {
+    let wasOnline: boolean | null = null;
+    const id = setInterval(() => {
+      if (!lastHeartbeatRef.current) { setHeartbeatAge(0); return; }
       const elapsed = Date.now() - lastHeartbeatRef.current;
       setHeartbeatAge(elapsed);
       const online = elapsed < config.heartbeatTimeout;
       setStatus(prev => {
-        if (prev.deviceOnline === online) return prev;
-        if (wasOnline && !online) {
+        if (!prev) return prev;
+        if (prev.deviceOnline === online) { wasOnline = online; return prev; }
+        if (wasOnline === true && !online) {
           setAlerts(a => [{
             id: `sys-off-${Date.now()}`,
             level: 'critical',
@@ -259,7 +206,7 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
             timestamp: new Date().toISOString(),
             source: 'system',
           }, ...a]);
-        } else if (!wasOnline && online) {
+        } else if (wasOnline === false && online) {
           setAlerts(a => [{
             id: `sys-on-${Date.now()}`,
             level: 'info',
@@ -272,7 +219,7 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
         return { ...prev, deviceOnline: online };
       });
     }, 2000);
-    return () => clearInterval(checkId);
+    return () => clearInterval(id);
   }, []);
 
   const logEvent = useCallback(
@@ -283,53 +230,35 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
     ) => {
       const entry: AlertItem = {
         id: `evt-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-        level,
-        message,
+        level, message,
         timestamp: new Date().toISOString(),
         source: opts?.source ?? 'system',
         actor: opts?.actor,
       };
-      // Route: system/device → real alerts panel; user/auth → audit log
       if (entry.source === 'system' || entry.source === 'device') {
         setAlerts(prev => [entry, ...prev]);
       } else {
         setAuditLog(prev => [entry, ...prev].slice(0, 500));
       }
-    },
-    [],
-  );
+    }, []);
 
   const sendCommand = useCallback(
     async (cmd: ControlCommand, actor?: string): Promise<boolean> => {
-      if (commandLockRef.current) {
-        console.warn('[DeviceContext] Command rejected — another command is in progress');
-        return false;
-      }
+      if (commandLockRef.current) return false;
       commandLockRef.current = true;
       setIsCommandPending(true);
       const recordId = `cmd-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
       const pendingRecord: CommandRecord = {
-        id: recordId,
-        timestamp: new Date().toISOString(),
-        actor,
-        command: cmd,
-        result: 'pending',
+        id: recordId, timestamp: new Date().toISOString(), actor,
+        command: cmd, result: 'pending',
       };
       setCommandHistory(prev => [pendingRecord, ...prev].slice(0, MAX_COMMAND_HISTORY));
-
       try {
         const result = await api.sendControlCommand(deviceId, cmd);
         if (result.success) {
-          setLatest(prev => ({
-            ...prev,
-            controlMode: cmd.controlMode,
-            fanStatus: cmd.fanStatus,
-            damperAngle: cmd.damperAngle,
-            timestamp: new Date().toISOString(),
-          }));
           logEvent(
             'info',
-            `Control command applied: Mode=${cmd.controlMode}, Fan=${cmd.fanStatus}, Damper=${cmd.damperAngle}°`,
+            `Control command queued: Mode=${cmd.controlMode}, Fan=${cmd.fanStatus}, Damper=${cmd.damperAngle}°`,
             { source: 'user', actor },
           );
           setCommandHistory(prev => prev.map(r => r.id === recordId ? { ...r, result: 'success' } : r));
@@ -347,9 +276,7 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
         commandLockRef.current = false;
         setIsCommandPending(false);
       }
-    },
-    [deviceId, logEvent],
-  );
+    }, [deviceId, logEvent]);
 
   const clearHistory = useCallback(() => setHistory([]), []);
   const clearAlerts = useCallback(() => setAlerts([]), []);
@@ -357,29 +284,30 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
 
   const resetThresholds = useCallback((actor?: string) => {
     setThresholds(DEFAULT_THRESHOLDS);
-    logEvent(
-      'info',
-      `Decision boundaries reset to defaults (safe=${DEFAULT_THRESHOLDS.safeThreshold}, moderate=${DEFAULT_THRESHOLDS.moderateThreshold}, high=${DEFAULT_THRESHOLDS.highThreshold}, ΔO=${DEFAULT_THRESHOLDS.minOutdoorDelta}, stab=±${DEFAULT_THRESHOLDS.hysteresis})`,
-      { source: 'user', actor },
-    );
+    logEvent('info', `Decision boundaries reset to defaults`, { source: 'user', actor });
   }, [logEvent]);
 
-  const getEvaluation = useCallback((): EvaluationSnapshot => {
+  const updateThresholds = useCallback(
+    (t: Partial<ControlThresholds>, actor?: string) => {
+      setThresholds(prev => {
+        const next = { ...prev, ...t };
+        logEvent('info',
+          `Decision boundaries updated: safe=${next.safeThreshold}, moderate=${next.moderateThreshold}, high=${next.highThreshold}, ΔO=${next.minOutdoorDelta}, stab=±${next.hysteresis} ppm`,
+          { source: 'user', actor });
+        return next;
+      });
+    }, [logEvent]);
+
+  const getEvaluation = useCallback((): EvaluationSnapshot | null => {
+    if (!latest) return null;
     const indoor = latest.indoorCO2;
     const outdoor = latest.outdoorCO2;
     const { safeThreshold, moderateThreshold, highThreshold, minOutdoorDelta, hysteresis } = thresholds;
     const delta = indoor - outdoor;
 
-    // ── Supervisory IF-ELSE decision layer ─────────────────────────
-    // Step 1: classify indoor CO₂ into a ventilation level.
-    // Step 2: gate any ventilation > Level 0 by outdoor advantage (delta ≥ minOutdoorDelta).
-    // Step 3: map the selected level to actuator targets.
-
-    // RULE 0 — Safe / Closed
     if (indoor < safeThreshold) {
       return {
-        rule: 'level-0-safe',
-        ventilationLevel: 0,
+        rule: 'level-0-safe', ventilationLevel: 0,
         ventilationLabel: 'Level 0 — Closed / Safe',
         ruleLabel: `IF indoor < ${safeThreshold} ppm`,
         decision: 'Air quality is acceptable — no ventilation required',
@@ -388,26 +316,20 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
         notes: 'Supervisory layer selects Level 0. Actuators held in idle state.',
       };
     }
-
-    // Outdoor air is not advantageous → block active ventilation regardless of indoor level.
     if (indoor >= safeThreshold && delta < minOutdoorDelta) {
       return {
-        rule: 'level-blocked-outdoor-worse',
-        ventilationLevel: 0,
+        rule: 'level-blocked-outdoor-worse', ventilationLevel: 0,
         ventilationLabel: 'Level 0 — Blocked (Outdoor Not Advantageous)',
         ruleLabel: `IF indoor ≥ ${safeThreshold} AND (indoor − outdoor) < ${minOutdoorDelta} ppm`,
         decision: 'Suppress ventilation — outdoor air offers no improvement',
         recommendation: { fanStatus: 'OFF', damperAction: 'CLOSE' },
         recommendedDamperAngle: 0,
-        notes: 'Supervisor overrides higher levels: opening the damper would not reduce indoor CO₂.',
+        notes: 'Opening the damper would not reduce indoor CO₂.',
       };
     }
-
-    // RULE 1 — Light Ventilation
     if (indoor < moderateThreshold) {
       return {
-        rule: 'level-1-light',
-        ventilationLevel: 1,
+        rule: 'level-1-light', ventilationLevel: 1,
         ventilationLabel: 'Level 1 — Light Ventilation',
         ruleLabel: `ELSE IF indoor < ${moderateThreshold} ppm AND Δ ≥ ${minOutdoorDelta} ppm`,
         decision: 'Mild buildup detected — apply light ventilation',
@@ -416,25 +338,19 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
         notes: 'Passive intake via damper; fan held off to minimise energy use.',
       };
     }
-
-    // RULE 2 — Medium Ventilation
     if (indoor < highThreshold) {
       return {
-        rule: 'level-2-medium',
-        ventilationLevel: 2,
+        rule: 'level-2-medium', ventilationLevel: 2,
         ventilationLabel: 'Level 2 — Medium Ventilation',
         ruleLabel: `ELSE IF indoor < ${highThreshold} ppm AND Δ ≥ ${minOutdoorDelta} ppm`,
         decision: 'Elevated CO₂ — engage active ventilation',
         recommendation: { fanStatus: 'ON', damperAction: 'OPEN' },
         recommendedDamperAngle: 60,
-        notes: 'Fan ON, damper at 60°. Stabilization band ±' + hysteresis + ' ppm smooths transitions to/from this level.',
+        notes: 'Fan ON, damper at 60°. Stabilization band ±' + hysteresis + ' ppm.',
       };
     }
-
-    // RULE 3 — Aggressive Ventilation
     return {
-      rule: 'level-3-aggressive',
-      ventilationLevel: 3,
+      rule: 'level-3-aggressive', ventilationLevel: 3,
       ventilationLabel: 'Level 3 — Aggressive Ventilation',
       ruleLabel: `ELSE indoor ≥ ${highThreshold} ppm AND Δ ≥ ${minOutdoorDelta} ppm`,
       decision: 'Critical CO₂ — maximise ventilation',
@@ -444,55 +360,18 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
     };
   }, [latest, thresholds]);
 
-  const updateThresholds = useCallback(
-    (t: Partial<ControlThresholds>, actor?: string) => {
-      setThresholds(prev => {
-        const next = { ...prev, ...t };
-        logEvent(
-          'info',
-          `Decision boundaries updated: safe=${next.safeThreshold}, moderate=${next.moderateThreshold}, high=${next.highThreshold}, ΔO=${next.minOutdoorDelta}, stab=±${next.hysteresis} ppm`,
-          { source: 'user', actor },
-        );
-        return next;
-      });
-    },
-    [logEvent],
-  );
-
-  const resumeSimulation = useCallback(() => {
-    isReadyStateRef.current = false;
-    setIsReadyState(false);
-    setCycleCount(0);
-  }, []);
+  const resumeSimulation = useCallback(() => { /* no-op (real backend only) */ }, []);
 
   return (
     <DeviceContext.Provider
       value={{
-        deviceId,
-        setDeviceId,
-        latest,
-        status,
-        history,
-        alerts,
-        auditLog,
-        commandHistory,
-        thresholds,
-        isLoading,
-        isCommandPending,
-        error,
-        cycleCount,
-        isReadyState,
+        deviceId, setDeviceId,
+        latest, status, history, alerts, auditLog, commandHistory, thresholds,
+        isLoading, isCommandPending, error,
+        hasData, isReadyState: false, cycleCount: 0,
         heartbeatAge,
-        sendCommand,
-        clearHistory,
-        clearAlerts,
-        clearAuditLog,
-        refresh,
-        updateThresholds,
-        resetThresholds,
-        resumeSimulation,
-        logEvent,
-        getEvaluation,
+        sendCommand, clearHistory, clearAlerts, clearAuditLog, refresh,
+        updateThresholds, resetThresholds, resumeSimulation, logEvent, getEvaluation,
       }}
     >
       {children}

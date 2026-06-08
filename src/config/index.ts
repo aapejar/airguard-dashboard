@@ -74,7 +74,11 @@ const env: Environment =
   (import.meta.env.VITE_APP_ENV as Environment) ||
   (import.meta.env.MODE === 'production' ? 'production' : 'development');
 
+/** API base URL injected at build time (`VITE_API_BASE_URL`) or via window override. */
+const viteApiBase = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, '') ?? '';
+
 export const config: Readonly<AppConfig> = Object.freeze({
   ...defaults[env],
+  apiBaseUrl: viteApiBase || defaults[env].apiBaseUrl,
   ...(typeof window !== 'undefined' ? window.__AIRGUARD_CONFIG__ : {}),
 });

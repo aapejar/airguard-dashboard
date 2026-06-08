@@ -63,11 +63,11 @@ export default function UsersPage() {
     );
   }
 
-  const handleCreate = (e: React.FormEvent) => {
+  const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
     setSuccess(null);
-    const result = createUser(username, password, role);
+    const result = await createUser(username, password, role);
     if (result.ok) {
       setSuccess(`User "${username}" created`);
       setUsername(''); setPassword(''); setRole('user');
@@ -77,9 +77,9 @@ export default function UsersPage() {
     }
   };
 
-  const handleResetPwd = (id: string) => {
+  const handleResetPwd = async (id: string) => {
     if (!newPwd.trim()) return;
-    const r = resetUserPassword(id, newPwd);
+    const r = await resetUserPassword(id, newPwd);
     if (r.ok) {
       setSuccess('Password reset');
       setResetForId(null);

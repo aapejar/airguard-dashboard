@@ -1,10 +1,5 @@
 import {
-  createContext,
-  useContext,
-  useState,
-  useCallback,
-  useEffect,
-  useRef,
+  createContext, useContext, useState, useCallback, useEffect, useRef,
   type ReactNode,
 } from 'react';
 import type { User, UserRole } from '@/types/sensor';
@@ -12,11 +7,6 @@ import { authService, type LoginResponse, type Verify2FAResponse } from '@/servi
 import { auditBus } from '@/services/auditBus';
 import { config } from '@/config';
 
-const SESSION_KEY = 'airguard.session';
-const ATTEMPTS_KEY = 'airguard.loginAttempts';
-const LOCKOUT_KEY = 'airguard.loginLockedUntil';
-
-// ── Public auth result shape (UI never sees raw service responses) ──────
 export type LoginResult =
   | { ok: true; user: User }
   | { ok: false; requires2FA: true; pendingUser: User; challengeId: string }
@@ -27,31 +17,32 @@ interface AuthContextType {
   users: User[];
   isAuthenticated: boolean;
   isLoading: boolean;
-  /** Number of failed attempts since last success */
   failedAttempts: number;
-  /** Timestamp (ms) until which login is locked, or null */
   lockedUntil: number | null;
   login: (username: string, password: string) => Promise<LoginResult>;
   verify2FA: (challengeId: string, pendingUser: User, code: string) => Promise<boolean>;
   logout: (reason?: 'manual' | 'inactivity') => void;
-  createUser: (username: string, password: string, role: UserRole) => { ok: boolean; error?: string };
-  deleteUser: (id: string) => void;
-  updateUserRole: (id: string, role: UserRole) => void;
-  setUserStatus: (id: string, status: 'active' | 'disabled') => void;
-  setUser2FA: (id: string, enabled: boolean) => void;
-  resetUserPassword: (id: string, newPassword: string) => { ok: boolean; error?: string };
+  reloadUsers: () => Promise<void>;
+  createUser: (username: string, password: string, role: UserRole) => Promise<{ ok: boolean; error?: string }>;
+  deleteUser: (id: string) => Promise<void>;
+  updateUserRole: (id: string, role: UserRole) => Promise<void>;
+  setUserStatus: (id: string, status: 'active' | 'disabled') => Promise<void>;
+  setUser2FA: (id: string, enabled: boolean) => Promise<void>;
+  resetUserPassword: (id: string, newPassword: string) => Promise<{ ok: boolean; error?: string }>;
   hasRole: (...roles: UserRole[]) => boolean;
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
 
+const ATTEMPTS_KEY = 'airguard.loginAttempts';
+const LOCKOUT_KEY = 'airguard.loginLockedUntil';
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
-  const [users, setUsers] = useState<User[]>(() => authService.listUsers());
+  const [users, setUsers] = useState<User[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [failedAttempts, setFailedAttempts] = useState<number>(() => {
-    const raw = localStorage.getItem(ATTEMPTS_KEY);
-    return raw ? Number(raw) || 0 : 0;
+    const raw = localStorage.getItem(ATTEMPTS_KEY); return raw ? Number(raw) || 0 : 0;
   });
   const [lockedUntil, setLockedUntil] = useState<number | null>(() => {
     const raw = localStorage.getItem(LOCKOUT_KEY);
@@ -62,21 +53,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const inactivityTimerRef = useRef<number | null>(null);
 
-  // ── Hydrate session ───────────────────────────────────
+  // Restore session from refresh token
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem(SESSION_KEY);
-      if (raw) setUser(JSON.parse(raw));
-    } catch { /* ignore */ }
-    finally { setIsLoading(false); }
+    (async () => {
+      try {
+        const u = await authService.restoreSession();
+        if (u) setUser(u);
+      } finally { setIsLoading(false); }
+    })();
   }, []);
 
-  const persistSession = (u: User | null) => {
-    if (u) localStorage.setItem(SESSION_KEY, JSON.stringify(u));
-    else localStorage.removeItem(SESSION_KEY);
-  };
-
-  // ── Failed attempts persistence ───────────────────────
   const recordFailedAttempt = useCallback(() => {
     setFailedAttempts(prev => {
       const next = prev + 1;
@@ -97,115 +83,84 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.removeItem(LOCKOUT_KEY);
   }, []);
 
-  // ── Login ─────────────────────────────────────────────
+  const reloadUsers = useCallback(async () => {
+    try { setUsers(await authService.listUsers()); }
+    catch { /* tolerate; admins-only endpoint */ }
+  }, []);
+
   const login = useCallback(
     async (username: string, password: string): Promise<LoginResult> => {
-      // Lockout check
       if (lockedUntil && Date.now() < lockedUntil) {
         const remain = Math.ceil((lockedUntil - Date.now()) / 1000);
         return { ok: false, error: `Too many failed attempts. Try again in ${remain}s.` };
       }
       if (lockedUntil && Date.now() >= lockedUntil) resetAttempts();
 
-      const result: LoginResponse = await authService.login(username, password);
+      let result: LoginResponse;
+      try { result = await authService.login(username, password); }
+      catch (err) {
+        const msg = err instanceof Error ? err.message : 'Authentication service unavailable';
+        return { ok: false, error: msg };
+      }
 
       if (result.status === 'invalid_credentials') {
         recordFailedAttempt();
-        auditBus.emit({
-          level: 'warning',
-          message: `Failed login attempt for "${username}"`,
-          source: 'auth',
-          actor: username,
-        });
-        return { ok: false, error: 'Invalid username or password' };
+        auditBus.emit({ level: 'warning', message: `Failed login attempt for "${username}"`, source: 'auth', actor: username });
+        return { ok: false, error: result.message ?? 'Invalid username or password' };
       }
-
       if (result.status === 'requires_2fa') {
-        // Don't reset attempts yet — only after full verification
-        auditBus.emit({
-          level: 'info',
-          message: `2FA challenge issued for "${result.pendingUser.username}"`,
-          source: 'auth',
-          actor: result.pendingUser.username,
-        });
-        return {
-          ok: false,
-          requires2FA: true,
-          pendingUser: result.pendingUser,
-          challengeId: result.challengeId,
-        };
+        auditBus.emit({ level: 'info', message: `2FA challenge issued for "${result.pendingUser.username}"`, source: 'auth', actor: result.pendingUser.username });
+        return { ok: false, requires2FA: true, pendingUser: result.pendingUser, challengeId: result.challengeId };
       }
 
-      // Success (non-admin)
       resetAttempts();
       setUser(result.user);
-      persistSession(result.user);
-      auditBus.emit({
-        level: 'info',
-        message: `User "${result.user.username}" signed in`,
-        source: 'auth',
-        actor: result.user.username,
-      });
+      auditBus.emit({ level: 'info', message: `User "${result.user.username}" signed in`, source: 'auth', actor: result.user.username });
       return { ok: true, user: result.user };
     },
     [lockedUntil, recordFailedAttempt, resetAttempts],
   );
 
-  // ── 2FA verification ──────────────────────────────────
   const verify2FA = useCallback(
     async (challengeId: string, pendingUser: User, code: string): Promise<boolean> => {
-      const res: Verify2FAResponse = await authService.verify2FA(challengeId, pendingUser, code);
+      let res: Verify2FAResponse;
+      try { res = await authService.verify2FA(challengeId, pendingUser, code); }
+      catch { return false; }
       if (res.status === 'invalid_code') {
         recordFailedAttempt();
-        auditBus.emit({
-          level: 'warning',
-          message: `Invalid 2FA code for "${pendingUser.username}"`,
-          source: 'auth',
-          actor: pendingUser.username,
-        });
+        auditBus.emit({ level: 'warning', message: `Invalid 2FA code for "${pendingUser.username}"`, source: 'auth', actor: pendingUser.username });
         return false;
       }
       resetAttempts();
       setUser(res.user);
-      persistSession(res.user);
-      auditBus.emit({
-        level: 'info',
-        message: `Admin "${res.user.username}" signed in (2FA verified)`,
-        source: 'auth',
-        actor: res.user.username,
-      });
+      auditBus.emit({ level: 'info', message: `User "${res.user.username}" signed in (2FA verified)`, source: 'auth', actor: res.user.username });
       return true;
     },
     [recordFailedAttempt, resetAttempts],
   );
 
-  // ── Logout ────────────────────────────────────────────
   const logout = useCallback((reason: 'manual' | 'inactivity' = 'manual') => {
     const username = user?.username;
     setUser(null);
-    persistSession(null);
+    setUsers([]);
     void authService.logout();
     if (username) {
       auditBus.emit({
         level: reason === 'inactivity' ? 'warning' : 'info',
-        message:
-          reason === 'inactivity'
-            ? `Session ended for "${username}" (inactivity timeout)`
-            : `User "${username}" signed out`,
-        source: 'auth',
-        actor: username,
+        message: reason === 'inactivity'
+          ? `Session ended for "${username}" (inactivity timeout)`
+          : `User "${username}" signed out`,
+        source: 'auth', actor: username,
       });
     }
   }, [user]);
 
-  // ── Inactivity auto-logout ────────────────────────────
+  // Inactivity auto-logout
   useEffect(() => {
     if (!user) return;
     const reset = () => {
       if (inactivityTimerRef.current) window.clearTimeout(inactivityTimerRef.current);
-      inactivityTimerRef.current = window.setTimeout(() => {
-        logout('inactivity');
-      }, config.sessionInactivityTimeout);
+      inactivityTimerRef.current = window.setTimeout(() => logout('inactivity'), config.sessionInactivityTimeout);
     };
     const events: (keyof WindowEventMap)[] = ['mousemove', 'keydown', 'click', 'scroll', 'touchstart'];
     events.forEach(e => window.addEventListener(e, reset, { passive: true }));
@@ -216,88 +171,57 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, [user, logout]);
 
-  // ── User CRUD (admin) ─────────────────────────────────
-  const createUser = useCallback((username: string, password: string, role: UserRole) => {
-    const res = authService.createUser(username, password, role);
+  // Auto-load users when an admin signs in
+  useEffect(() => {
+    if (user?.role === 'admin') void reloadUsers();
+    else setUsers([]);
+  }, [user, reloadUsers]);
+
+  const createUser = useCallback(async (username: string, password: string, role: UserRole) => {
+    const res = await authService.createUser(username, password, role);
     if (res.ok) {
-      setUsers(authService.listUsers());
-      auditBus.emit({
-        level: 'info',
-        message: `User "${username}" (${role}) created`,
-        source: 'auth',
-        actor: user?.username,
-      });
+      await reloadUsers();
+      auditBus.emit({ level: 'info', message: `User "${username}" (${role}) created`, source: 'auth', actor: user?.username });
     }
     return { ok: res.ok, error: res.error };
-  }, [user]);
+  }, [user, reloadUsers]);
 
-  const deleteUser = useCallback((id: string) => {
+  const deleteUser = useCallback(async (id: string) => {
     const target = users.find(u => u.id === id);
-    authService.deleteUser(id);
-    setUsers(authService.listUsers());
-    if (target) {
-      auditBus.emit({
-        level: 'info',
-        message: `User "${target.username}" deleted`,
-        source: 'auth',
-        actor: user?.username,
-      });
-    }
-  }, [user, users]);
+    await authService.deleteUser(id);
+    await reloadUsers();
+    if (target) auditBus.emit({ level: 'info', message: `User "${target.username}" deleted`, source: 'auth', actor: user?.username });
+  }, [user, users, reloadUsers]);
 
-  const updateUserRole = useCallback((id: string, role: UserRole) => {
-    authService.updateUserRole(id, role);
-    setUsers(authService.listUsers());
+  const updateUserRole = useCallback(async (id: string, role: UserRole) => {
+    await authService.updateUserRole(id, role);
+    await reloadUsers();
     const target = users.find(u => u.id === id);
-    if (target) {
-      auditBus.emit({
-        level: 'info',
-        message: `User "${target.username}" role changed to ${role}`,
-        source: 'auth',
-        actor: user?.username,
-      });
-    }
-  }, [user, users]);
+    if (target) auditBus.emit({ level: 'info', message: `User "${target.username}" role changed to ${role}`, source: 'auth', actor: user?.username });
+  }, [user, users, reloadUsers]);
 
-  const setUserStatus = useCallback((id: string, status: 'active' | 'disabled') => {
-    authService.setUserStatus(id, status);
-    setUsers(authService.listUsers());
+  const setUserStatus = useCallback(async (id: string, status: 'active' | 'disabled') => {
+    await authService.setUserStatus(id, status);
+    await reloadUsers();
     const target = users.find(u => u.id === id);
-    if (target) {
-      auditBus.emit({
-        level: status === 'disabled' ? 'warning' : 'info',
-        message: `User "${target.username}" ${status === 'disabled' ? 'disabled' : 'enabled'}`,
-        source: 'auth',
-        actor: user?.username,
-      });
-    }
-  }, [user, users]);
+    if (target) auditBus.emit({
+      level: status === 'disabled' ? 'warning' : 'info',
+      message: `User "${target.username}" ${status === 'disabled' ? 'disabled' : 'enabled'}`,
+      source: 'auth', actor: user?.username,
+    });
+  }, [user, users, reloadUsers]);
 
-  const setUser2FA = useCallback((id: string, enabled: boolean) => {
-    authService.setUser2FA(id, enabled);
-    setUsers(authService.listUsers());
+  const setUser2FA = useCallback(async (id: string, enabled: boolean) => {
+    await authService.setUser2FA(id, enabled);
+    await reloadUsers();
     const target = users.find(u => u.id === id);
-    if (target) {
-      auditBus.emit({
-        level: 'info',
-        message: `2FA ${enabled ? 'enabled' : 'disabled'} for "${target.username}"`,
-        source: 'auth',
-        actor: user?.username,
-      });
-    }
-  }, [user, users]);
+    if (target) auditBus.emit({ level: 'info', message: `2FA ${enabled ? 'enabled' : 'disabled'} for "${target.username}"`, source: 'auth', actor: user?.username });
+  }, [user, users, reloadUsers]);
 
-  const resetUserPassword = useCallback((id: string, newPassword: string) => {
-    const res = authService.resetPassword(id, newPassword);
+  const resetUserPassword = useCallback(async (id: string, newPassword: string) => {
+    const res = await authService.resetPassword(id, newPassword);
     const target = users.find(u => u.id === id);
-    if (res.ok && target) {
-      auditBus.emit({
-        level: 'warning',
-        message: `Password reset for "${target.username}"`,
-        source: 'auth',
-        actor: user?.username,
-      });
-    }
+    if (res.ok && target) auditBus.emit({ level: 'warning', message: `Password reset for "${target.username}"`, source: 'auth', actor: user?.username });
     return res;
   }, [user, users]);
 
@@ -309,21 +233,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   return (
     <AuthContext.Provider
       value={{
-        user,
-        users,
+        user, users,
         isAuthenticated: !!user,
         isLoading,
-        failedAttempts,
-        lockedUntil,
-        login,
-        verify2FA,
-        logout,
-        createUser,
-        deleteUser,
-        updateUserRole,
-        setUserStatus,
-        setUser2FA,
-        resetUserPassword,
+        failedAttempts, lockedUntil,
+        login, verify2FA, logout, reloadUsers,
+        createUser, deleteUser, updateUserRole, setUserStatus, setUser2FA, resetUserPassword,
         hasRole,
       }}
     >
