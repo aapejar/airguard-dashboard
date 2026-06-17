@@ -944,6 +944,17 @@ Frontend mapping: `services/api.ts.fetchWithRetry` already retries on network / 
 
 ## 27. Changelog
 
+### 1.2.0 — Backend production delivery (current)
+- Delivered standalone `airguard-backend/` package (Express/TypeScript/Prisma/PostgreSQL) implementing every endpoint in §13, the ESP32 contract in §14 (byte-for-byte field parity), the lifecycle in §19, and the error envelope in §25.
+- **New endpoints** beyond §13's minimum: `POST /api/auth/refresh`, `POST /api/auth/2fa/setup`, `POST /api/devices/:id/rotate-key`, `GET/POST /api/alerts` + `/:id/ack`, `GET /api/audit` + `/export`, `GET /api/devices/:id/readings/export`, `GET /api/config/export`, `GET /api/settings/backup`, `POST /api/settings/restore`, `GET /api/health`.
+- **Auth & security:** argon2id passwords + apiKey hashes; HS256 JWTs with SHA-256-hashed, rotated refresh tokens; RFC 6238 TOTP via `otplib`; Helmet, CORS pinned to `FRONTEND_URL`, `express-rate-limit` on `/api/auth/*` (10/min/IP), device routes (60/min/device), control (10/min/user).
+- **Lifecycle:** server-side state machine (`registered → online → warning → offline → maintenance`) driven by a 2 s heartbeat watchdog; transitions emit `Alert` + `AuditLog` rows.
+- **Command queue:** per-device serialisation; 409 `COMMAND_IN_FLIGHT` while pending; ESP32 GET marks `delivered`; matching reading echo marks `applied`.
+- **Retention job:** nightly cron-style worker enforcing §22 (downsample 30 d→1 y to one reading/min/device, hard-delete past retention).
+- **DevOps:** Dockerfile (multi-stage, non-root), `docker-compose.yml` (postgres + api + nginx), PM2 ecosystem file, systemd unit, daily `pg_dump` cron with 30 d / 12 w / 5 y rotation, full Ubuntu deployment guide.
+- **No demo data:** seed inserts nothing; admin and devices provisioned via `npm run create-admin` / `npm run create-device`. Frontend already calls `VITE_API_BASE_URL` — no UI changes in this release.
+- **New backend env vars** (see §23): `JWT_REFRESH_TTL_DAYS`, `HEARTBEAT_WATCHDOG_INTERVAL`, `LOGIN_MAX_ATTEMPTS`, `LOGIN_LOCKOUT_MS`, `RATE_LIMIT_AUTH_PER_MIN`, `RATE_LIMIT_DEVICE_PER_MIN`, `RATE_LIMIT_CONTROL_PER_MIN`, `RETENTION_READINGS_RAW_DAYS`, `RETENTION_READINGS_DOWNSAMPLED_DAYS`, `RETENTION_ALERTS_DAYS`, `RETENTION_AUDIT_DAYS`.
+
 ### 1.1.0 — Enterprise-readiness pass (current)
 - Added Device Lifecycle states (Registered/Online/Warning/Offline/Maintenance) with transition matrix.
 - Standardized Alarm Severity (INFO/WARNING/CRITICAL/EMERGENCY) with examples.
