@@ -944,6 +944,21 @@ Frontend mapping: `services/api.ts.fetchWithRetry` already retries on network / 
 
 ## 27. Changelog
 
+### 1.3.0 — Final production audit (current)
+- **Backend re-delivered** as `airguard-backend.zip` with a clean, internally consistent tree (Prisma schema regenerated from a single baseline migration, all routes/middleware/jobs rewritten for production).
+- **Server-side RBAC enforced on every route** (`admin | operator | user`). Frontend checks remain convenience only.
+- **Argon2id everywhere** — passwords AND device API keys hashed at rest with argon2id (m=64 MiB, t=3, p=1).
+- **Refresh-token rotation + revocation** — rotated on every `/auth/refresh`, revoked on `/auth/logout`, user disable, password reset.
+- **2FA**: TOTP via `otplib`; `PATCH /api/users/:id/2fa { enabled:true }` returns `{ secret, otpauth, qr }` for provisioning.
+- **Supervisory evaluator wired both directions**: `POST /devices/:id/control` recomputes in AUTO mode using the latest reading + per-device thresholds; the ESP32 reading ingest path auto-issues a follow-up command if drift exceeds 5°.
+- **Heartbeat watchdog** (2 s) transitions `online → warning → offline` based on `DEVICE_WARNING_AFTER` / `DEVICE_OFFLINE_AFTER`.
+- **Retention** (6 h job) prunes readings older than `READING_RETENTION_DAYS`, audit logs older than `AUDIT_RETENTION_DAYS`, expired/revoked refresh tokens.
+- **Standardized error envelope** `{error:{code,message,details?}}` on every route with the full §25 code set, including `NO_TELEMETRY`, `DEVICE_AUTH_FAILED`, `ACCOUNT_LOCKED`.
+- **Provisioning CLIs**: `npm run create-admin`, `npm run create-device`, `npm run rotate-device-key`. No demo users, no seed devices.
+- **DevOps**: multi-stage Dockerfile (non-root), `docker-compose.yml` (api + postgres:16-alpine + nginx), `deployment/nginx/airguard.conf`, PM2 ecosystem, systemd unit, `pg_dump` rotation script (30 d daily / 12 w weekly / 5 y yearly), cron entry.
+- **Frontend audit**: confirmed zero mock data, zero demo credentials, zero simulated telemetry. All API calls go through `src/services/api.ts` → `VITE_API_BASE_URL`. No UI, layout, routing, or styling changes in this release.
+- **Docs**: `docs/API.md`, `docs/UBUNTU-DEPLOYMENT.md`, `docs/ESP32.md`, `docs/SECURITY.md`, `docs/RUNBOOK.md`, `docs/CHANGELOG.md` shipped inside the zip.
+
 ### 1.2.0 — Backend production delivery (current)
 - Delivered standalone `airguard-backend/` package (Express/TypeScript/Prisma/PostgreSQL) implementing every endpoint in §13, the ESP32 contract in §14 (byte-for-byte field parity), the lifecycle in §19, and the error envelope in §25.
 - **New endpoints** beyond §13's minimum: `POST /api/auth/refresh`, `POST /api/auth/2fa/setup`, `POST /api/devices/:id/rotate-key`, `GET/POST /api/alerts` + `/:id/ack`, `GET /api/audit` + `/export`, `GET /api/devices/:id/readings/export`, `GET /api/config/export`, `GET /api/settings/backup`, `POST /api/settings/restore`, `GET /api/health`.
